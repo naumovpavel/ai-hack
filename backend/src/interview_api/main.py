@@ -8,7 +8,6 @@ from botocore.config import Config as BotoConfig
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from faster_whisper import WhisperModel
-from ollama import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from interview_api.api.exception_handlers import register_exception_handlers
@@ -22,11 +21,11 @@ from interview_api.providers.document_text import PdfDocxTextExtractor
 from interview_api.providers.faster_whisper_transcription import (
     FasterWhisperTranscriptionProvider,
 )
-from interview_api.providers.ollama_questions import OllamaQuestionGenerationProvider
 from interview_api.providers.openrouter_interview import (
     OpenRouterClient,
     OpenRouterInterviewPipelineProvider,
 )
+from interview_api.providers.openrouter_questions import OpenRouterQuestionGenerationProvider
 from interview_api.services.answer_evaluation import AnswerEvaluationService
 from interview_api.services.document_extraction import DocumentExtractionService
 from interview_api.services.question_generation import QuestionGenerationService
@@ -50,26 +49,11 @@ def create_app(
     workflow_engine: AsyncEngine | None = None,
 ) -> FastAPI:
     resolved_settings = settings or get_settings()
-    managed_ollama_client: AsyncClient | None = None
     managed_transcription_provider: FasterWhisperTranscriptionProvider | None = None
     managed_openrouter_client: OpenRouterClient | None = None
     managed_workflow_ai: OpenRouterWorkflowAI | None = None
     managed_workflow_engine: AsyncEngine | None = None
     managed_s3_clients: list[object] = []
-
-    if question_generation_service is None:
-        managed_ollama_client = AsyncClient(
-            host=resolved_settings.ollama_host,
-            timeout=resolved_settings.ollama_timeout_seconds,
-        )
-        question_generation_service = QuestionGenerationService(
-            provider=OllamaQuestionGenerationProvider(
-                managed_ollama_client,
-                model=resolved_settings.ollama_question_model,
-                prompt_path=resolved_settings.question_prompt_path,
-                context_length=resolved_settings.ollama_context_length,
-            ),
-        )
 
     if document_extraction_service is None:
         document_extraction_service = DocumentExtractionService(
@@ -88,7 +72,9 @@ def create_app(
         if resolved_settings.openai_proxy_url
         else ""
     )
-    if answer_evaluation_service is None and api_key and proxy_url:
+    if (
+        question_generation_service is None or answer_evaluation_service is None
+    ) and api_key and proxy_url:
         managed_openrouter_client = OpenRouterClient(
             api_key=api_key,
             proxy_url=proxy_url,
@@ -97,16 +83,29 @@ def create_app(
             timeout_seconds=resolved_settings.openrouter_timeout_seconds,
             max_retries=resolved_settings.openrouter_max_retries,
         )
+
+    if question_generation_service is None and managed_openrouter_client is not None:
+        question_generation_service = QuestionGenerationService(
+            provider=OpenRouterQuestionGenerationProvider(
+                managed_openrouter_client,
+                model=resolved_settings.question_generation_model,
+                prompt_path=resolved_settings.question_prompt_path,
+            )
+        )
+
+    if answer_evaluation_service is None and managed_openrouter_client is not None:
         answer_evaluation_service = AnswerEvaluationService(
             OpenRouterInterviewPipelineProvider(
                 managed_openrouter_client,
                 judge_workers=resolved_settings.interview_judge_workers,
             )
         )
-    if answer_evaluation_service is None and bool(api_key) != bool(proxy_url):
+    if (
+        question_generation_service is None or answer_evaluation_service is None
+    ) and bool(api_key) != bool(proxy_url):
         logger.warning(
-            "Answer evaluation is disabled: OPENAI_API_KEY and OPENAI_PROXY_URL "
-            "must both be configured"
+            "OpenRouter services are disabled: OPENAI_API_KEY and "
+            "OPENAI_PROXY_URL must both be configured"
         )
 
     if workflow_service is None and resolved_settings.app_env != "test":
@@ -225,8 +224,6 @@ def create_app(
                     logger.exception("Failed to initialize the transcription provider")
             yield
         finally:
-            if managed_ollama_client is not None:
-                await managed_ollama_client.close()
             if managed_transcription_provider is not None:
                 managed_transcription_provider.close()
             if managed_openrouter_client is not None:

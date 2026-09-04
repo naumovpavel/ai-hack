@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import Mock
 
 from fastapi.testclient import TestClient
 
@@ -116,11 +116,25 @@ def test_generate_questions_rejects_oversized_document(
     assert response.json()["error"]["code"] == "document_too_large"
 
 
-def test_configured_app_wires_ollama_provider_without_network(monkeypatch) -> None:
-    fake_client = Mock()
-    fake_client.close = AsyncMock()
+def test_generate_questions_requires_openrouter_configuration() -> None:
+    settings = Settings(app_env="test", _env_file=None)
 
-    class MockOllamaProvider:
+    with TestClient(create_app(settings=settings)) as client:
+        response = client.post(
+            "/api/v1/questions/generate",
+            files={"vacancy": ("vacancy.txt", b"Python backend role", "text/plain")},
+            data={"question_count": "1", "core_question_count": "1", "language": "en"},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "service_not_configured"
+
+
+def test_configured_app_wires_openrouter_provider_without_network(monkeypatch) -> None:
+    fake_client = Mock()
+    fake_client.close = Mock()
+
+    class MockOpenRouterProvider:
         async def generate(self, input: QuestionGenerationInput) -> list[QuestionDraft]:
             return [
                 QuestionDraft(
@@ -132,15 +146,16 @@ def test_configured_app_wires_ollama_provider_without_network(monkeypatch) -> No
             ]
 
     client_factory = Mock(return_value=fake_client)
-    provider_factory = Mock(return_value=MockOllamaProvider())
-    monkeypatch.setattr("interview_api.main.AsyncClient", client_factory)
+    provider_factory = Mock(return_value=MockOpenRouterProvider())
+    monkeypatch.setattr("interview_api.main.OpenRouterClient", client_factory)
     monkeypatch.setattr(
-        "interview_api.main.OllamaQuestionGenerationProvider", provider_factory
+        "interview_api.main.OpenRouterQuestionGenerationProvider", provider_factory
     )
     settings = Settings(
         app_env="test",
-        ollama_host="http://ollama.test:11434",
-        ollama_question_model="configured-model",
+        openai_api_key="secret",
+        openai_proxy_url="https://proxy.test:443",
+        question_generation_model="openai/gpt-5.6-luna",
         _env_file=None,
     )
 
@@ -153,6 +168,7 @@ def test_configured_app_wires_ollama_provider_without_network(monkeypatch) -> No
 
     assert response.status_code == 200
     assert response.json()["questions"][0]["source_file_ids"] == ["vacancy"]
-    assert provider_factory.call_args.kwargs["model"] == "configured-model"
-    assert client_factory.call_args.kwargs["host"] == "http://ollama.test:11434"
-    fake_client.close.assert_awaited_once()
+    assert provider_factory.call_args.kwargs["model"] == "openai/gpt-5.6-luna"
+    assert client_factory.call_args.kwargs["proxy_url"] == "https://proxy.test:443"
+    client_factory.assert_called_once()
+    fake_client.close.assert_called_once()

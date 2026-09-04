@@ -55,12 +55,8 @@ class Settings(BaseSettings):
     openrouter_fallback_model: str | None = None
     openrouter_timeout_seconds: float = Field(default=90.0, gt=0, le=600)
     openrouter_max_retries: int = Field(default=1, ge=0, le=5)
+    question_generation_model: str = "openai/gpt-5.6-luna"
     interview_judge_workers: int = Field(default=6, ge=1, le=20)
-
-    ollama_host: str = "http://127.0.0.1:11434"
-    ollama_question_model: str = "qwen3:4b"
-    ollama_timeout_seconds: float = Field(default=120.0, gt=0, le=600)
-    ollama_context_length: int = Field(default=16_384, ge=4096, le=262_144)
 
     question_prompt_path: Path = Path("app/prompts/initial_questions_v1.txt")
     max_document_bytes: int = Field(default=10 * 1024 * 1024, gt=0)
