@@ -1,6 +1,7 @@
 from fastapi import Request
 
 from interview_api.domain.errors import ServiceNotConfiguredError
+from interview_api.services.answer_evaluation import AnswerEvaluationService
 from interview_api.services.document_extraction import DocumentExtractionService
 from interview_api.services.question_generation import QuestionGenerationService
 from interview_api.services.transcription import TranscriptionService
@@ -24,4 +25,11 @@ def get_document_extraction_service(request: Request) -> DocumentExtractionServi
     service = getattr(request.app.state, "document_extraction_service", None)
     if service is None:
         raise ServiceNotConfiguredError("document_extraction")
+    return service
+
+
+def get_answer_evaluation_service(request: Request) -> AnswerEvaluationService:
+    service = getattr(request.app.state, "answer_evaluation_service", None)
+    if service is None:
+        raise ServiceNotConfiguredError("answer_evaluation")
     return service
