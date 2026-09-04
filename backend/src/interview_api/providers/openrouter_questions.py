@@ -1,23 +1,22 @@
+from __future__ import annotations
+
+import asyncio
 import json
 from pathlib import Path
+from typing import Any, Protocol
 
-from httpx import HTTPError, TimeoutException
-from ollama import AsyncClient, ResponseError
 from pydantic import ValidationError
 
-from interview_api.domain.errors import (
-    ProviderResponseError,
-    ProviderTimeoutError,
-    ProviderUnavailableError,
-)
+from interview_api.domain.errors import ProviderResponseError
 from interview_api.domain.models import (
     LoadedContext,
     QuestionDraft,
     QuestionGenerationInput,
     QuestionType,
 )
+from interview_api.providers.openrouter_interview import StructuredResult
 
-OLLAMA_QUESTIONS_SCHEMA = {
+OPENROUTER_QUESTIONS_SCHEMA = {
     "type": "object",
     "properties": {
         "questions": {
@@ -45,30 +44,43 @@ _GENERATION_BATCH_SIZE = 3
 _EXTRA_BATCH_ATTEMPTS = 6
 
 
-class OllamaQuestionGenerationProvider:
+class QuestionStructuredClient(Protocol):
+    def complete_json(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        schema_name: str,
+        schema: dict[str, Any],
+        purpose: str,
+        model: str | None = None,
+    ) -> StructuredResult: ...
+
+
+class OpenRouterQuestionGenerationProvider:
     def __init__(
         self,
-        client: AsyncClient,
+        client: QuestionStructuredClient,
         *,
         model: str,
         prompt_path: Path,
-        context_length: int,
     ) -> None:
         self._client = client
         self._model = model
         self._instructions = self._load_prompt(prompt_path)
-        self._context_length = context_length
 
     async def generate(self, input: QuestionGenerationInput) -> list[QuestionDraft]:
+        return await asyncio.to_thread(self._generate_sync, input)
+
+    def _generate_sync(self, input: QuestionGenerationInput) -> list[QuestionDraft]:
         seen_texts: set[str] = set()
-        core_questions = await self._generate_group(
+        core_questions = self._generate_group(
             contexts=input.core_contexts,
             target_count=input.core_question_count,
             question_type=QuestionType.CORE,
             language=input.language,
             seen_texts=seen_texts,
         )
-        personalized_questions = await self._generate_group(
+        personalized_questions = self._generate_group(
             contexts=input.personalized_contexts,
             target_count=input.question_count - input.core_question_count,
             question_type=QuestionType.PERSONALIZED,
@@ -77,7 +89,7 @@ class OllamaQuestionGenerationProvider:
         )
         return [*core_questions, *personalized_questions]
 
-    async def _generate_group(
+    def _generate_group(
         self,
         *,
         contexts: list[LoadedContext],
@@ -96,7 +108,7 @@ class OllamaQuestionGenerationProvider:
         )
         feedback: str | None = None
 
-        for _attempt in range(max_attempts):
+        for attempt in range(max_attempts):
             remaining = target_count - len(questions)
             if remaining == 0:
                 return questions
@@ -106,19 +118,17 @@ class OllamaQuestionGenerationProvider:
                 core_contexts=contexts if question_type is QuestionType.CORE else [],
                 personalized_contexts=contexts,
                 question_count=batch_size,
-                core_question_count=(
-                    batch_size if question_type is QuestionType.CORE else 0
-                ),
+                core_question_count=batch_size if question_type is QuestionType.CORE else 0,
                 language=language,
             )
             try:
-                candidates = await self._request_candidates(
+                candidates = self._request_candidates(
                     request_input,
                     feedback=feedback,
                     existing_question_texts=list(seen_texts),
-                    attempt=_attempt,
+                    attempt=attempt,
                 )
-            except (ValueError, TypeError):
+            except (ValidationError, ValueError, TypeError):
                 feedback = "The response was not valid JSON matching the schema."
                 continue
 
@@ -147,7 +157,7 @@ class OllamaQuestionGenerationProvider:
             }
         )
 
-    async def _request_candidates(
+    def _request_candidates(
         self,
         input: QuestionGenerationInput,
         *,
@@ -155,34 +165,25 @@ class OllamaQuestionGenerationProvider:
         existing_question_texts: list[str],
         attempt: int,
     ) -> list[QuestionDraft]:
-        try:
-            response = await self._client.chat(
-                model=self._model,
-                messages=[
-                    {"role": "system", "content": self._instructions},
-                    {
-                        "role": "user",
-                        "content": self._build_input(
-                            input,
-                            feedback,
-                            existing_question_texts,
-                            attempt,
-                        ),
-                    },
-                ],
-                format=OLLAMA_QUESTIONS_SCHEMA,
-                options={
-                    "temperature": min(attempt * 0.2, 0.8),
-                    "num_ctx": self._context_length,
+        result = self._client.complete_json(
+            messages=[
+                {"role": "system", "content": self._instructions},
+                {
+                    "role": "user",
+                    "content": self._build_input(
+                        input,
+                        feedback,
+                        existing_question_texts,
+                        attempt,
+                    ),
                 },
-                think=False,
-            )
-        except TimeoutException as exc:
-            raise ProviderTimeoutError() from exc
-        except (HTTPError, ResponseError) as exc:
-            raise ProviderUnavailableError() from exc
-
-        return self._parse_candidates(response.message.content)
+            ],
+            schema_name="interview_questions",
+            schema=OPENROUTER_QUESTIONS_SCHEMA,
+            purpose="question_generation",
+            model=self._model,
+        )
+        return self._parse_candidates(result.value)
 
     @staticmethod
     def _load_prompt(prompt_path: Path) -> str:
@@ -205,9 +206,7 @@ class OllamaQuestionGenerationProvider:
             "language": input.language,
             "question_count": input.question_count,
             "core_question_count": input.core_question_count,
-            "personalized_question_count": (
-                input.question_count - input.core_question_count
-            ),
+            "personalized_question_count": input.question_count - input.core_question_count,
             "core_contexts": [context.model_dump() for context in input.core_contexts],
             "personalized_contexts": [
                 context.model_dump() for context in input.personalized_contexts
@@ -225,9 +224,8 @@ class OllamaQuestionGenerationProvider:
         return json.dumps(payload, ensure_ascii=False)
 
     @staticmethod
-    def _parse_candidates(content: str) -> list[QuestionDraft]:
-        payload = json.loads(content)
-        if not isinstance(payload, dict) or not isinstance(payload.get("questions"), list):
+    def _parse_candidates(payload: dict[str, Any]) -> list[QuestionDraft]:
+        if not isinstance(payload.get("questions"), list):
             raise ValueError("Missing questions array")
 
         candidates: list[QuestionDraft] = []

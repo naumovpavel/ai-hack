@@ -88,10 +88,12 @@ class RetryingPool:
     def __init__(self, responses: list[FakeHttpResponse]) -> None:
         self.responses = iter(responses)
         self.calls = 0
+        self.request_kwargs: list[dict[str, Any]] = []
 
     def request(self, *args: Any, **kwargs: Any) -> FakeHttpResponse:
-        del args, kwargs
+        del args
         self.calls += 1
+        self.request_kwargs.append(kwargs)
         return next(self.responses)
 
 
@@ -197,3 +199,31 @@ def test_client_retries_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert pool.calls == 2
     assert result.value == {"claims": []}
+
+
+def test_client_uses_question_generation_model_override() -> None:
+    raw = {
+        "model": "openai/gpt-5.6-luna",
+        "provider": "test-provider",
+        "choices": [{"message": {"content": json.dumps({"questions": []})}}],
+    }
+    pool = RetryingPool([FakeHttpResponse(200, json.dumps(raw).encode())])
+    client = OpenRouterClient(
+        api_key="secret",
+        proxy_url="https://proxy.example:443",
+        model="answer-model",
+        fallback_model=None,
+    )
+    client._pool = pool  # type: ignore[assignment]
+
+    client.complete_json(
+        messages=[{"role": "user", "content": "test"}],
+        schema_name="questions",
+        schema={"type": "object"},
+        purpose="question_generation",
+        model="openai/gpt-5.6-luna",
+    )
+
+    payload = json.loads(pool.request_kwargs[0]["body"])
+    assert payload["model"] == "openai/gpt-5.6-luna"
+    assert payload["max_tokens"] == 4000
