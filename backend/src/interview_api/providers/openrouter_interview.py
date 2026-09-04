@@ -202,8 +202,11 @@ class OpenRouterClient:
         schema_name: str,
         schema: dict[str, Any],
         purpose: str,
+        model: str | None = None,
     ) -> StructuredResult:
-        models = tuple(dict.fromkeys(filter(None, (self.model, self.fallback_model))))
+        models = tuple(
+            dict.fromkeys(filter(None, (model or self.model, self.fallback_model)))
+        )
         errors: list[Exception] = []
         for model in models:
             try:
@@ -234,6 +237,7 @@ class OpenRouterClient:
                 "extraction": 1800,
                 "judgement": 700,
                 "completeness": 700,
+                "question_generation": 4000,
             }.get(purpose, 1200),
             "reasoning": {"enabled": False, "exclude": True},
             "response_format": {

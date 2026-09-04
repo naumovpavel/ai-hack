@@ -21,9 +21,8 @@ follow-up questions later without rewriting existing business logic.
 - FastAPI
 - Pydantic v2
 - Uvicorn
-- Ollama
-- Ollama Python client
-- qwen3:4b for local question generation
+- OpenRouter API
+- GPT-5.6 Luna for question generation
 - faster-whisper for local transcription
 - pytest
 - pydantic-settings
@@ -40,18 +39,18 @@ Do not introduce:
 - LangChain;
 - vector databases.
 
-## Local inference
+## Model inference
 
-Question generation runs through the local Ollama HTTP API.
+Question generation runs through OpenRouter using structured JSON output.
 
 Default question-generation configuration:
 
-- `OLLAMA_HOST=http://127.0.0.1:11434`;
-- `OLLAMA_QUESTION_MODEL=qwen3:4b`;
-- `OLLAMA_TIMEOUT_SECONDS=120`.
+- `QUESTION_GENERATION_MODEL=openai/gpt-5.6-luna`;
+- `OPENROUTER_TIMEOUT_SECONDS=90`;
+- `OPENROUTER_MAX_RETRIES=1`.
 
-The model name and Ollama host must come from configuration. Routes and
-services must not hardcode them.
+The model name, credentials and proxy URL must come from configuration. Routes
+and services must not hardcode them.
 
 Transcription runs in-process using faster-whisper and CTranslate2.
 
@@ -141,11 +140,11 @@ services
     ↓
 provider interfaces
     ↓
-local provider implementations
+provider implementations
 
 Current implementations:
 
-- OllamaQuestionGenerationProvider;
+- OpenRouterQuestionGenerationProvider;
 - FasterWhisperTranscriptionProvider.
 
 Required abstractions:
@@ -154,11 +153,11 @@ QuestionGenerationProvider
 TranscriptionProvider
 DocumentTextExtractor
 
-Routes must not call Ollama, faster-whisper or another provider SDK directly.
+Routes must not call OpenRouter, faster-whisper or another provider SDK directly.
 
 Question prompts must live outside route code.
 
-Ollama calls must have timeouts and graceful error handling.
+OpenRouter calls must have timeouts, retries and graceful error handling.
 Local transcription failures must be translated to application errors.
 CPU/GPU-bound transcription must not block the asyncio event loop.
 
@@ -191,12 +190,12 @@ without changing the current HTTP route or batch service.
 
 ## Testing
 
-Unit/API tests must not call a running Ollama instance, load a real Whisper
-model or download model weights.
+Unit/API tests must not call OpenRouter, load a real Whisper model or download
+model weights.
 
 Mock provider interfaces.
 
-Provider adapter tests must mock the Ollama client and faster-whisper model.
+Provider adapter tests must mock the OpenRouter client and faster-whisper model.
 
 Tests required for:
 - health endpoint;

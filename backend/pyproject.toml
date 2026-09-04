@@ -12,7 +12,6 @@ dependencies = [
     "certifi>=2024.12",
     "fastapi>=0.115,<1",
     "faster-whisper>=1.1,<2",
-    "ollama>=0.6,<1",
     "pydantic>=2.10,<3",
     "pydantic-settings>=2.6,<3",
     "pypdf>=5,<7",

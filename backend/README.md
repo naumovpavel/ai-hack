@@ -2,7 +2,7 @@
 
 Minimal FastAPI backend for question generation, audio transcription, and technical
 answer evaluation.
-Question generation uses a local Ollama provider with Pydantic structured output.
+Question generation uses GPT-5.6 Luna through OpenRouter with structured output.
 Audio transcription uses a local faster-whisper model.
 
 ## Local setup
@@ -23,19 +23,14 @@ Health check:
 curl http://127.0.0.1:8000/health
 ```
 
-Install Ollama, then download the configured model:
-
-```bash
-ollama pull qwen3:4b
-```
-
-The default local endpoint is `http://127.0.0.1:11434`. Configure it through
-`OLLAMA_HOST`, `OLLAMA_QUESTION_MODEL`, and `OLLAMA_TIMEOUT_SECONDS`.
+Set both `OPENAI_API_KEY` and `OPENAI_PROXY_URL` to enable OpenRouter-backed
+question generation and answer evaluation. The client requires the proxy and
+never falls back to a direct connection. Question generation uses
+`openai/gpt-5.6-luna` by default and is configured with
+`QUESTION_GENERATION_MODEL`.
 
 ## Technical answer evaluation
 
-Set both `OPENAI_API_KEY` and `OPENAI_PROXY_URL` to enable answer evaluation. The
-OpenRouter client requires the proxy and never falls back to a direct connection.
 Luna (`openai/gpt-5.6-luna`) is the primary model; DeepSeek V4 Flash is used only
 when the primary model is unavailable. Both model names are configurable through
 `OPENROUTER_MODEL` and `OPENROUTER_FALLBACK_MODEL`.
@@ -72,8 +67,8 @@ with `MAX_DOCUMENT_BYTES` and `MAX_DOCUMENT_CHARACTERS`.
 
 The first application startup downloads the configured Whisper model. The default
 CPU-friendly configuration is `small`, `cpu`, and `int8`; change the `WHISPER_*`
-settings in `.env` if needed. Tests inject fake providers and never call Ollama,
-download models, or use an external API.
+settings in `.env` if needed. Tests inject fake providers and never call
+OpenRouter, download models, or use an external API.
 
 Transcription request (PowerShell):
 
