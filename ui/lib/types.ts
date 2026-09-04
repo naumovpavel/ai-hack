@@ -216,6 +216,22 @@ export type InterviewBriefing = {
   humanReviewNotice: string;
 };
 
+export type PracticeQuestion = {
+  id: string;
+  text: string;
+  topic: string;
+  kind: 'practice';
+  orderIndex: number;
+  answerSeconds: number;
+};
+
+export type PracticeSet = {
+  mode: 'practice';
+  questions: PracticeQuestion[];
+  localOnly: boolean;
+  notice: string;
+};
+
 export type InterviewState = {
   interviewId: string;
   status: string;

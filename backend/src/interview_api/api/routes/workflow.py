@@ -47,6 +47,7 @@ from interview_api.workflow.schemas import (
     MediaListResponse,
     PositionDetailResponse,
     PositionResponse,
+    PracticeSetResponse,
     QuestionResponse,
     QuestionReviewRequest,
     ResolveInviteRequest,
@@ -360,6 +361,17 @@ async def get_interview_state(interview_id: str, request: Request) -> InterviewS
     service = _service(request)
     actor = await service.require_actor(_session_token(request), role="candidate")
     return await service.get_interview_state(actor=actor, interview_id=interview_id)
+
+
+@router.post(
+    "/interviews/{interview_id}/practice",
+    response_model=PracticeSetResponse,
+    responses=ERROR_RESPONSES,
+)
+async def create_practice_set(interview_id: str, request: Request) -> PracticeSetResponse:
+    service = _service(request)
+    actor = await service.require_actor(_session_token(request), role="candidate")
+    return await service.create_practice_set(actor=actor, interview_id=interview_id)
 
 
 @router.post(

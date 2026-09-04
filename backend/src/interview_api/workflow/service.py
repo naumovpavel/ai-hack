@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import secrets
 from asyncio import CancelledError
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from difflib import SequenceMatcher
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import quote
@@ -16,6 +18,7 @@ from interview_api.providers.interfaces import DocumentTextExtractor
 from interview_api.workflow.ai import (
     AnalysisDraft,
     AnalysisItemDraft,
+    PracticeQuestionProposal,
     WorkflowAIGateway,
     WorkflowTranscript,
 )
@@ -61,6 +64,8 @@ from interview_api.workflow.schemas import (
     MediaListResponse,
     PositionDetailResponse,
     PositionResponse,
+    PracticeQuestionResponse,
+    PracticeSetResponse,
     PublicQuestion,
     QuestionResponse,
     QuestionReviewRequest,
@@ -96,6 +101,7 @@ class WorkflowService(TelegramAuthMixin, HiringWorkflowMixin):
         self.repository = repository
         self.storage = storage
         self.ai = ai
+        self._practice_sets: dict[str, PracticeSetResponse] = {}
         self.invite_base_url = invite_base_url.rstrip("/")
         self._extractor = document_extractor or PdfDocxTextExtractor()
         self._clock = clock or (lambda: datetime.now(UTC))
@@ -394,6 +400,117 @@ class WorkflowService(TelegramAuthMixin, HiringWorkflowMixin):
         candidate = await self.repository.get_candidate(actor.candidate_id)
         interview = await self.repository.get_interview_for_candidate(candidate.id)
         return await self._briefing(candidate, interview)
+
+    async def create_practice_set(
+        self, *, actor: UserRow, interview_id: str
+    ) -> PracticeSetResponse:
+        interview = await self._candidate_interview(actor, interview_id)
+        if interview.status != "ready":
+            raise WorkflowConflictError(
+                "Practice is available only before the real interview starts."
+            )
+        cached = self._practice_sets.get(interview.id)
+        if cached is not None:
+            return cached
+        candidate = await self.repository.get_candidate(interview.candidate_id)
+        position = await self.repository.get_position(candidate.position_id)
+        real_questions = [
+            row.text
+            for row in await self.repository.list_questions(candidate.id)
+            if row.status == "approved"
+        ]
+        role_family = self._practice_role_family(position.role or position.title)
+        level_band = self._practice_level_band(position.level, position.title)
+
+        proposals: list[PracticeQuestionProposal] = []
+        for _attempt in range(2):
+            try:
+                generated = await self.ai.generate_practice_questions(
+                    role_family=role_family,
+                    level_band=level_band,
+                    question_count=3,
+                    language="ru",
+                )
+            except WorkflowProviderError:
+                continue
+            proposals = self._safe_practice_questions(generated, real_questions)
+            if len(proposals) == 3:
+                break
+
+        if len(proposals) < 3:
+            fallback = [
+                PracticeQuestionProposal(
+                    text=(
+                        "Представьте учебный сервис в незнакомой предметной области. "
+                        "Как бы вы уточнили задачу и выбрали первый шаг к решению?"
+                    ),
+                    topic="Разбор ситуации",
+                ),
+                PracticeQuestionProposal(
+                    text=(
+                        "На вымышленном проекте есть два разумных подхода. "
+                        "Как бы вы сравнили их и проверили своё решение?"
+                    ),
+                    topic="Принятие решений",
+                ),
+                PracticeQuestionProposal(
+                    text=(
+                        "Результат учебной задачи оказался хуже ожидаемого. "
+                        "Как бы вы нашли причину и скорректировали дальнейшие действия?"
+                    ),
+                    topic="Рефлексия",
+                ),
+                PracticeQuestionProposal(
+                    text=(
+                        "Вообразите, что участники учебной команды по-разному поняли цель. "
+                        "Как бы вы помогли им договориться о следующем шаге?"
+                    ),
+                    topic="Коммуникация",
+                ),
+                PracticeQuestionProposal(
+                    text=(
+                        "В тренировочном кейсе не хватает данных для уверенного решения. "
+                        "Какие вопросы вы зададите и какие допущения обозначите?"
+                    ),
+                    topic="Работа с неопределённостью",
+                ),
+            ]
+            existing = {self._normalize_question(item.text) for item in proposals}
+            for item in self._safe_practice_questions(fallback, real_questions):
+                normalized = self._normalize_question(item.text)
+                if normalized in existing:
+                    continue
+                proposals.append(item)
+                existing.add(normalized)
+                if len(proposals) == 3:
+                    break
+
+        if len(proposals) < 2:
+            raise WorkflowProviderError("Could not create a safely distinct practice set.")
+
+        # Generation may finish after the candidate starts in another tab.
+        interview = await self._candidate_interview(actor, interview_id)
+        if interview.status != "ready":
+            raise WorkflowConflictError(
+                "Practice is available only before the real interview starts."
+            )
+        response = PracticeSetResponse(
+            questions=[
+                PracticeQuestionResponse(
+                    id=f"practice-{secrets.token_urlsafe(10)}",
+                    text=item.text,
+                    topic=item.topic,
+                    order_index=index,
+                    answer_seconds=item.answer_seconds,
+                )
+                for index, item in enumerate(proposals[:3])
+            ]
+        )
+        # Practice is ephemeral; do not retain every interview for the process lifetime.
+        if len(self._practice_sets) >= 128:
+            self._practice_sets.pop(next(iter(self._practice_sets)))
+        self._practice_sets[interview.id] = response
+        return response
 
     async def start_interview(self, *, actor: UserRow, interview_id: str) -> InterviewStateResponse:
         interview = await self._candidate_interview(actor, interview_id)
@@ -914,6 +1031,82 @@ class WorkflowService(TelegramAuthMixin, HiringWorkflowMixin):
             current_question=self._public_question(current),
             allows_follow_ups=position.max_follow_up_questions > 0,
         )
+
+    @classmethod
+    def _safe_practice_questions(
+        cls,
+        proposals: list[PracticeQuestionProposal],
+        real_questions: list[str],
+    ) -> list[PracticeQuestionProposal]:
+        safe: list[PracticeQuestionProposal] = []
+        seen: set[str] = set()
+        for proposal in proposals:
+            normalized = cls._normalize_question(proposal.text)
+            if not normalized or normalized in seen:
+                continue
+            if any(cls._questions_are_too_similar(proposal.text, real) for real in real_questions):
+                continue
+            safe.append(proposal)
+            seen.add(normalized)
+        return safe
+
+    @staticmethod
+    def _normalize_question(value: str) -> str:
+        return " ".join(re.findall(r"[\w]+", value.casefold(), flags=re.UNICODE))
+
+    @classmethod
+    def _questions_are_too_similar(cls, practice: str, real: str) -> bool:
+        left = cls._normalize_question(practice)
+        right = cls._normalize_question(real)
+        if not left or not right:
+            return False
+        if left == right or SequenceMatcher(None, left, right).ratio() >= 0.72:
+            return True
+        left_words = left.split()
+        right_words = right.split()
+        union = set(left_words) | set(right_words)
+        if union and len(set(left_words) & set(right_words)) / len(union) >= 0.55:
+            return True
+        if len(left_words) >= 5 and len(right_words) >= 5:
+            right_phrases = {
+                tuple(right_words[index : index + 5]) for index in range(len(right_words) - 4)
+            }
+            if any(
+                tuple(left_words[index : index + 5]) in right_phrases
+                for index in range(len(left_words) - 4)
+            ):
+                return True
+        return False
+
+    @staticmethod
+    def _practice_role_family(title: str) -> str:
+        lowered = title.casefold()
+        families = (
+            ("backend", ("backend", "бэкенд", "python", "java", "golang", "php")),
+            ("frontend", ("frontend", "фронтенд", "react", "vue", "angular")),
+            ("mobile", ("mobile", "ios", "android", "мобиль")),
+            ("data", ("data", "аналит", "machine learning", "ml ", "bi ")),
+            ("quality assurance", ("qa", "test", "тестиров")),
+            ("infrastructure", ("devops", "sre", "cloud", "инфраструктур")),
+            ("security", ("security", "безопасност")),
+            ("product", ("product", "project", "продакт", "проект")),
+            ("design", ("design", "дизайн", "ux", "ui")),
+        )
+        return next(
+            (family for family, keys in families if any(key in lowered for key in keys)),
+            "general",
+        )
+
+    @staticmethod
+    def _practice_level_band(level: str, title: str) -> str:
+        lowered = f"{level} {title}".casefold()
+        if any(value in lowered for value in ("lead", "лид", "руковод", "principal")):
+            return "lead"
+        if any(value in lowered for value in ("senior", "старш", "ведущ")):
+            return "senior"
+        if any(value in lowered for value in ("junior", "младш", "стаж")):
+            return "junior"
+        return "middle"
 
     async def _interview_state(self, interview: InterviewRow) -> InterviewStateResponse:
         current = await self._active_current_question(interview)

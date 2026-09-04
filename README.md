@@ -90,8 +90,11 @@ The demo user switcher is disabled by default.
    profile and personalized question rows, then save. The invite link is copied
    and the recruiter stays on the interview overview. Check the global candidate
    search and its vacancy/interview labels.
-6. Open the invite URL, grant camera and microphone permissions, and complete
-   the interview. Questions are spoken through backend OpenRouter TTS; an
+6. Open the invite URL and sign in as the candidate. Inspect the practice
+   examples and try the optional mock interview. Confirm that leaving practice
+   keeps the real interview unstarted and sends no answer recordings to the server.
+   Return to preparation, give consent, grant camera and microphone permissions,
+   and complete the real interview. Questions are spoken through backend OpenRouter TTS; an
    explicit retry is offered if speech fails.
 7. Return to the HR user and wait for analysis. Verify audio, video, transcript,
    evidence, and recommendation.

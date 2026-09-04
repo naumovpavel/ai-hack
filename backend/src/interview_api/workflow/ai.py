@@ -16,6 +16,13 @@ class QuestionProposal:
 
 
 @dataclass(slots=True)
+class PracticeQuestionProposal:
+    text: str
+    topic: str
+    answer_seconds: int = 90
+
+
+@dataclass(slots=True)
 class FollowUpProposal:
     should_ask: bool
     question: str = ""
@@ -74,6 +81,15 @@ class WorkflowAIGateway(Protocol):
         duration_minutes: int,
         interview_context: dict[str, object] | None = None,
     ) -> list[QuestionProposal]: ...
+
+    async def generate_practice_questions(
+        self,
+        *,
+        role_family: str,
+        level_band: str,
+        question_count: int,
+        language: str,
+    ) -> list[PracticeQuestionProposal]: ...
 
     async def transcribe(
         self,
@@ -146,6 +162,41 @@ class DeterministicWorkflowAI:
                 )
             )
         return proposals
+
+    async def generate_practice_questions(
+        self,
+        *,
+        role_family: str,
+        level_band: str,
+        question_count: int,
+        language: str,
+    ) -> list[PracticeQuestionProposal]:
+        del level_band, language
+        templates = [
+            (
+                "Разбор ситуации",
+                "Представьте учебный сервис в незнакомой предметной области. "
+                "Как бы вы уточнили задачу и выбрали первый шаг к решению?",
+            ),
+            (
+                "Принятие решений",
+                "Расскажите на вымышленном примере, как сравнить два технических "
+                "подхода и проверить, что выбранный вариант работает.",
+            ),
+            (
+                "Рефлексия",
+                "Допустим, результат учебного проекта оказался хуже ожидаемого. "
+                "Как бы вы нашли причину и изменили свой подход?",
+            ),
+        ]
+        return [
+            PracticeQuestionProposal(
+                text=text,
+                topic=f"{topic} · {role_family}",
+                answer_seconds=90,
+            )
+            for topic, text in templates[:question_count]
+        ]
 
     async def transcribe(
         self,

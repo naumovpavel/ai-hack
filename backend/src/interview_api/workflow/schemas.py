@@ -162,6 +162,25 @@ class InterviewBriefingResponse(ApiModel):
     )
 
 
+class PracticeQuestionResponse(ApiModel):
+    id: str
+    text: str
+    topic: str
+    kind: Literal["practice"] = "practice"
+    order_index: int
+    answer_seconds: int = Field(ge=30, le=180)
+
+
+class PracticeSetResponse(ApiModel):
+    mode: Literal["practice"] = "practice"
+    questions: list[PracticeQuestionResponse]
+    local_only: bool = True
+    notice: str = (
+        "Это тренировочные примеры. Настоящие вопросы будут другими, а ответы "
+        "не передаются рекрутеру и не используются при оценке."
+    )
+
+
 class StartInterviewRequest(ApiModel):
     consent_to_recording: bool
 

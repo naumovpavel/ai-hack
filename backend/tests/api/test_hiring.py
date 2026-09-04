@@ -172,6 +172,68 @@ def test_complete_hierarchy_preserves_pool_settings_and_idempotent_candidate(hir
     assert client.get("/api/v1/candidates").status_code == 403
 
 
+def test_plan_candidate_can_practice_then_complete_real_interview(hiring_client, monkeypatch):
+    client, service = hiring_client
+    vacancy, plan = make_plan(client, minutes=17)
+    draft = candidate_draft(client, plan)
+    approval = assert_ok(client.post(
+        f"/api/v1/interview-plans/{plan['id']}/candidates", json=draft,
+    ))
+    candidate_id = approval["candidateId"]
+    real_questions = assert_ok(client.get(f"/api/v1/candidates/{candidate_id}/questions"))
+    calls = []
+    generate = service.ai.generate_practice_questions
+
+    async def record_profile(**kwargs):
+        calls.append(kwargs)
+        return await generate(**kwargs)
+
+    monkeypatch.setattr(service.ai, "generate_practice_questions", record_profile)
+    stored_before = dict(service.storage.objects)
+    sign_in_telegram(client, service)
+    assert_ok(client.post("/api/v1/invites/resolve", json={"token": approval["inviteToken"]}))
+    path = f"/api/v1/interviews/{approval['interviewId']}"
+    before = assert_ok(client.get(f"{path}/state"))
+    examples = assert_ok(client.post(f"{path}/practice"))
+    assert len(examples["questions"]) == 3
+    assert calls == [{
+        "role_family": service._practice_role_family(vacancy["role"]),
+        "level_band": service._practice_level_band(vacancy["level"], vacancy["title"]),
+        "question_count": 3,
+        "language": "ru",
+    }]
+    assert all(
+        not service._questions_are_too_similar(p["text"], q["text"])
+        for p in examples["questions"] for q in real_questions
+    )
+    assert assert_ok(client.get(f"{path}/state")) == before
+    assert service.storage.objects == stored_before
+    # A practice ID cannot be used in the real answer or speech endpoints.
+    practice_id = examples["questions"][0]["id"]
+    state = assert_ok(client.post(f"{path}/start", json={"consentToRecording": True}))
+    assert state["remainingSeconds"] == 17 * 60
+    assert client.post(f"{path}/answers", data={"questionId": practice_id}, files={
+        "audio": ("practice.webm", b"TEXT:local practice", "audio/webm"),
+        "video": ("practice.webm", b"test-video", "video/webm"),
+    }).status_code == 409
+    assert client.get(f"{path}/questions/{practice_id}/speech").status_code == 404
+    question = state["currentQuestion"]
+    while question:
+        answer = assert_ok(client.post(
+            f"{path}/answers", data={"questionId": question["id"]}, files={
+            "audio": ("answer.webm", b"TEXT:An independent answer", "audio/webm"),
+            "video": ("answer.webm", b"test-video", "video/webm"),
+        }))
+        question = answer["nextQuestion"]
+    assert_ok(client.post(f"{path}/complete"))
+    assert_ok(client.post("/api/v1/dev/session", json={"userId": "hr-demo"}))
+    assert assert_ok(client.get(f"/api/v1/candidates/{candidate_id}/questions")) == real_questions
+    analysis = assert_ok(client.get(f"/api/v1/candidates/{candidate_id}/analysis"))
+    assert analysis["recommendationLocked"] is True
+    assert analysis["recommendation"] is None
+    assert {q["questionId"] for q in analysis["questions"]} == {q["id"] for q in real_questions}
+
+
 def test_templates_context_accumulation_and_no_questions_during_vacancy_upload(hiring_client):
     client, service = hiring_client
     templates = assert_ok(client.get("/api/v1/vacancy-templates"))
