@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Annotated, Any, BinaryIO
+from typing import Annotated, Any, BinaryIO, Literal
 from uuid import UUID
 
 from pydantic import (
@@ -180,6 +180,52 @@ class TranscriptionResult(StrictModel):
     is_final: bool
     question_id: str | None
     meta: ProviderMeta
+
+
+class AnnotationLabel(StrEnum):
+    INCORRECT = "неправильный"
+    REVIEW = "рекомендуется проверка"
+
+
+class EvaluateAnswerRequest(StrictModel):
+    question: str = Field(min_length=1, max_length=4_000)
+    answer: str = Field(min_length=1, max_length=50_000)
+
+
+class ExtractedClaim(StrictModel):
+    start: int = Field(ge=0)
+    end: int = Field(gt=0)
+    text: str = Field(min_length=1)
+
+
+class ClaimJudgement(StrictModel):
+    verdict: Literal["correct", "incorrect"]
+    confidence: float = Field(ge=0, le=1)
+    rationale: str = Field(min_length=1)
+
+
+class AnswerAnnotation(ExtractedClaim):
+    label: AnnotationLabel
+    confidence: float = Field(ge=0, le=1)
+    rationale: str = Field(min_length=1)
+
+
+class MissingAspect(ExtractedClaim):
+    confidence: float = Field(ge=0, le=1)
+    rationale: str = Field(min_length=1)
+
+
+class EvaluationMeta(StrictModel):
+    models: list[str] = Field(min_length=1)
+    providers: list[str] = Field(min_length=1)
+    prompt_version: str = Field(min_length=1)
+    claims_evaluated: int = Field(ge=0)
+
+
+class EvaluateAnswerResponse(StrictModel):
+    spans: list[AnswerAnnotation]
+    missing_aspects: list[MissingAspect]
+    meta: EvaluationMeta
 
 
 class ErrorDetail(StrictModel):

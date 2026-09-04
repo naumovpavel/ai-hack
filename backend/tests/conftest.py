@@ -9,13 +9,20 @@ from fastapi.testclient import TestClient
 from interview_api.config import Settings
 from interview_api.domain.models import (
     AudioInput,
+    EvaluateAnswerResponse,
+    EvaluationMeta,
     ProviderTranscript,
     QuestionDraft,
     QuestionGenerationInput,
     QuestionType,
 )
 from interview_api.main import create_app
-from interview_api.providers.interfaces import QuestionGenerationProvider, TranscriptionProvider
+from interview_api.providers.interfaces import (
+    AnswerEvaluationProvider,
+    QuestionGenerationProvider,
+    TranscriptionProvider,
+)
+from interview_api.services.answer_evaluation import AnswerEvaluationService
 from interview_api.services.question_generation import QuestionGenerationService
 from interview_api.services.transcription import TranscriptionService
 
@@ -68,12 +75,27 @@ class FakeTranscriptionProvider:
         return ProviderTranscript(text="Тестовая расшифровка", provider="fake")
 
 
+class FakeAnswerEvaluationProvider:
+    async def evaluate(self, question: str, answer: str) -> EvaluateAnswerResponse:
+        return EvaluateAnswerResponse(
+            spans=[],
+            missing_aspects=[],
+            meta=EvaluationMeta(
+                models=["fake"],
+                providers=["fake"],
+                prompt_version="test",
+                claims_evaluated=0,
+            ),
+        )
+
+
 @pytest.fixture
 def app_factory() -> Callable[..., TestClient]:
     def factory(
         *,
         question_provider: QuestionGenerationProvider | None = None,
         transcription_provider: TranscriptionProvider | None = None,
+        answer_evaluation_provider: AnswerEvaluationProvider | None = None,
     ) -> TestClient:
         settings = Settings(
             app_env="test",
@@ -89,10 +111,14 @@ def app_factory() -> Callable[..., TestClient]:
             provider=transcription_provider or FakeTranscriptionProvider(),
             max_audio_bytes=settings.max_audio_bytes,
         )
+        answer_evaluation_service = AnswerEvaluationService(
+            answer_evaluation_provider or FakeAnswerEvaluationProvider()
+        )
         app = create_app(
             settings=settings,
             question_generation_service=question_service,
             transcription_service=transcription_service,
+            answer_evaluation_service=answer_evaluation_service,
         )
         return TestClient(app)
 

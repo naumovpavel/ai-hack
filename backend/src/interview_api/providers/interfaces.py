@@ -5,6 +5,7 @@ from interview_api.domain.models import (
     AudioInput,
     ContextReference,
     DocumentInput,
+    EvaluateAnswerResponse,
     LoadedContext,
     ProviderTranscript,
     QuestionDraft,
@@ -26,3 +27,7 @@ class DocumentTextExtractor(Protocol):
 
 class TranscriptionProvider(Protocol):
     async def transcribe(self, audio: AudioInput) -> ProviderTranscript: ...
+
+
+class AnswerEvaluationProvider(Protocol):
+    async def evaluate(self, question: str, answer: str) -> EvaluateAnswerResponse: ...

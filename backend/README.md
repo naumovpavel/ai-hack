@@ -1,6 +1,7 @@
 # AI Interview Backend MVP
 
-Minimal FastAPI backend for question generation and audio transcription.
+Minimal FastAPI backend for question generation, audio transcription, and technical
+answer evaluation.
 Question generation uses a local Ollama provider with Pydantic structured output.
 Audio transcription uses a local faster-whisper model.
 
@@ -30,6 +31,27 @@ ollama pull qwen3:4b
 
 The default local endpoint is `http://127.0.0.1:11434`. Configure it through
 `OLLAMA_HOST`, `OLLAMA_QUESTION_MODEL`, and `OLLAMA_TIMEOUT_SECONDS`.
+
+## Technical answer evaluation
+
+Set both `OPENAI_API_KEY` and `OPENAI_PROXY_URL` to enable answer evaluation. The
+OpenRouter client requires the proxy and never falls back to a direct connection.
+Luna (`openai/gpt-5.6-luna`) is the primary model; DeepSeek V4 Flash is used only
+when the primary model is unavailable. Both model names are configurable through
+`OPENROUTER_MODEL` and `OPENROUTER_FALLBACK_MODEL`.
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/api/v1/interviews/evaluate-answer" `
+  -H "Content-Type: application/json" `
+  -d '{"question":"How does MVCC work?","answer":"MVCC locks every row."}'
+```
+
+The response contains only technically incorrect claims and low-confidence claims.
+Confidently correct claims are omitted. Labels are `неправильный` and
+`рекомендуется проверка`; the latter is based only on judge uncertainty, not on
+personal experience or unavailable biographical context. Every answer annotation
+is an exact `[start, end)` span. Concrete question parts omitted from the answer are
+returned separately in `missing_aspects` as spans into the question.
 
 Question generation accepts PDF, DOCX, or UTF-8 TXT files directly and does not
 persist them:

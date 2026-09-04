@@ -9,6 +9,7 @@ description = "FastAPI backend skeleton for an AI interview MVP"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "certifi>=2024.12",
     "fastapi>=0.115,<1",
     "faster-whisper>=1.1,<2",
     "ollama>=0.6,<1",
@@ -17,6 +18,7 @@ dependencies = [
     "pypdf>=5,<7",
     "python-docx>=1.1,<2",
     "python-multipart>=0.0.18,<1",
+    "urllib3>=2.2,<3",
     "uvicorn[standard]>=0.32,<1",
 ]
 

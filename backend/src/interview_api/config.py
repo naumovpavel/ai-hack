@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,6 +17,14 @@ class Settings(BaseSettings):
 
     app_name: str = "AI Interview Backend"
     app_env: Literal["local", "test", "production"] = "local"
+
+    openai_api_key: SecretStr | None = None
+    openai_proxy_url: SecretStr | None = None
+    openrouter_model: str = "openai/gpt-5.6-luna"
+    openrouter_fallback_model: str | None = "deepseek/deepseek-v4-flash-0731"
+    openrouter_timeout_seconds: float = Field(default=90.0, gt=0, le=600)
+    openrouter_max_retries: int = Field(default=1, ge=0, le=5)
+    interview_judge_workers: int = Field(default=6, ge=1, le=20)
 
     ollama_host: str = "http://127.0.0.1:11434"
     ollama_question_model: str = "qwen3:4b"
