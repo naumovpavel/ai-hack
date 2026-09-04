@@ -86,6 +86,12 @@ def _service(request: Request) -> WorkflowService:
     return service
 
 
+def _require_demo_mode(request: Request) -> None:
+    settings = getattr(request.app.state, "settings", None)
+    if getattr(settings, "app_env", "production") == "production":
+        raise WorkflowNotFoundError("Demo session endpoints are disabled.")
+
+
 def _session_token(request: Request) -> str | None:
     service = _service(request)
     return request.cookies.get(service.cookie_name)
@@ -112,6 +118,7 @@ def _set_session_cookie(response: Response, token: str, service: WorkflowService
 
 @router.get("/dev/users", response_model=list[UserResponse], responses=ERROR_RESPONSES)
 async def list_demo_users(request: Request) -> list[UserResponse]:
+    _require_demo_mode(request)
     return await _service(request).list_demo_users()
 
 
@@ -121,6 +128,7 @@ async def switch_demo_session(
     request: Request,
     response: Response,
 ) -> SessionResponse:
+    _require_demo_mode(request)
     service = _service(request)
     token, session = await service.create_demo_session(payload.user_id)
     _set_session_cookie(response, token, service)
@@ -129,6 +137,7 @@ async def switch_demo_session(
 
 @router.delete("/dev/session", status_code=204)
 async def clear_demo_session(request: Request, response: Response) -> None:
+    _require_demo_mode(request)
     response.delete_cookie(_service(request).cookie_name, path="/")
 
 
@@ -352,7 +361,7 @@ async def submit_answer(
     question_id: Annotated[str, Form(alias="questionId", min_length=1)],
     audio: Annotated[UploadFile, File()],
     video: Annotated[UploadFile, File()],
-    duration_seconds: Annotated[int | None, Form(alias="durationSeconds", ge=0, le=7_200)] = None,
+    duration_seconds: Annotated[int | None, Form(alias="durationSeconds", ge=0, le=300)] = None,
     language: Annotated[str, Form(min_length=2, max_length=35)] = "ru",
 ) -> AnswerResponse:
     service = _service(request)

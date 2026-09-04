@@ -99,7 +99,6 @@ workflow = WorkflowService(
     storage=storage,
     ai=ai,
     invite_base_url="http://localhost:3000/?invite=",
-    required_review_seconds=settings.review_seconds_per_item,
 )
 app = create_app(
     settings=settings,

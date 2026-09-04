@@ -227,3 +227,4 @@ def test_client_uses_question_generation_model_override() -> None:
     payload = json.loads(pool.request_kwargs[0]["body"])
     assert payload["model"] == "openai/gpt-5.6-luna"
     assert payload["max_tokens"] == 4000
+    assert payload["provider"]["zdr"] is True

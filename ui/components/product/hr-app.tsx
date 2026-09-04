@@ -106,6 +106,11 @@ function statusCopy(status: ProcessingStatus, decision: HiringDecision) {
       label: 'Ссылка отправлена',
       className: 'bg-blue-50 text-blue-700',
     };
+  if (status === 'in_progress')
+    return {
+      label: 'Интервью идёт',
+      className: 'bg-blue-50 text-blue-700',
+    };
   if (status === 'not_started' || status === 'questions_draft')
     return {
       label: 'Согласовать вопросы',
@@ -860,6 +865,9 @@ function QuestionApproval({
         items.map((item) => (item.id === updated.id ? updated : item)),
       );
       return updated;
+    } catch (caught) {
+      setError(errorText(caught));
+      return null;
     } finally {
       setSavingId(null);
     }
@@ -872,7 +880,7 @@ function QuestionApproval({
       for (const question of questions.filter(
         (item) => item.status === 'draft',
       )) {
-        await saveQuestion(question);
+        if (!(await saveQuestion(question))) return;
       }
       const result = await api.approveCandidateQuestions(candidate.id);
       setApproval(result);
@@ -1121,8 +1129,11 @@ function ReviewableAnalysis({
     const panel = reviewPanelRef.current;
     if (!panel) return;
     const observer = new IntersectionObserver(
-      ([entry]) => setReviewPanelVisible(entry.intersectionRatio >= 0.6),
-      { threshold: [0, 0.6, 1] },
+      ([entry]) =>
+        setReviewPanelVisible(
+          entry.isIntersecting && entry.intersectionRatio >= 0.1,
+        ),
+      { threshold: [0, 0.1, 1] },
     );
     observer.observe(panel);
     return () => observer.disconnect();

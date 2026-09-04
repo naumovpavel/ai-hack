@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
+from asyncio import CancelledError
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
@@ -16,6 +17,7 @@ from interview_api.workflow.ai import AnalysisDraft, AnalysisItemDraft, Workflow
 from interview_api.workflow.entities import (
     AnalysisItemRow,
     AnalysisRow,
+    AnswerRow,
     CandidateRow,
     DecisionRow,
     InterviewRow,
@@ -103,6 +105,7 @@ class WorkflowService:
 
     async def initialize(self) -> None:
         await self.storage.ensure_bucket()
+        await self.repository.recover_interrupted_analyses()
         await self.repository.ensure_demo_users()
 
     async def list_demo_users(self) -> list[UserResponse]:
@@ -316,9 +319,7 @@ class WorkflowService:
                 "A decided candidate cannot receive a new interview invitation."
             )
         try:
-            existing_interview = await self.repository.get_interview_for_candidate(
-                candidate.id
-            )
+            existing_interview = await self.repository.get_interview_for_candidate(candidate.id)
         except WorkflowNotFoundError:
             existing_interview = None
         if existing_interview is not None and existing_interview.status != "ready":
@@ -410,6 +411,36 @@ class WorkflowService:
         interview = await self._candidate_interview(actor, interview_id)
         if interview.status != "in_progress":
             raise WorkflowConflictError("Interview is not in progress.")
+        self._validate_media(audio_data, maximum=self.max_audio_bytes, label="audio", required=True)
+        self._validate_media(video_data, maximum=self.max_video_bytes, label="video", required=True)
+        existing_answer = await self.repository.get_answer_for_question(
+            interview_id=interview.id, question_id=question_id
+        )
+        if existing_answer is not None:
+            await self._ensure_answer_media(
+                interview=interview,
+                answer=existing_answer,
+                question_id=question_id,
+                audio_data=audio_data,
+                audio_filename=audio_filename,
+                audio_content_type=audio_content_type,
+                video_data=video_data,
+                video_filename=video_filename,
+                video_content_type=video_content_type,
+            )
+            remaining_seconds = self._remaining_seconds(interview, self._now())
+            next_question = (
+                await self.repository.next_unanswered_question(interview.id)
+                if remaining_seconds > 0
+                else None
+            )
+            return AnswerResponse(
+                answer_id=existing_answer.id,
+                transcript=existing_answer.transcript,
+                next_question=self._public_question(next_question),
+                follow_up_added=False,
+                remaining_seconds=remaining_seconds,
+            )
         now = self._now()
         remaining_seconds = self._remaining_seconds(interview, now)
         if (
@@ -427,71 +458,51 @@ class WorkflowService:
                 "Answers must be submitted in interview order.",
                 details={"expectedQuestionId": current.id},
             )
-        self._validate_media(audio_data, maximum=self.max_audio_bytes, label="audio", required=True)
-        self._validate_media(
-            video_data, maximum=self.max_video_bytes, label="video", required=True
-        )
-
-        audio_key = self._media_key(
-            candidate_id=interview.candidate_id,
-            interview_id=interview.id,
-            question_id=question_id,
-            kind="audio",
-            filename=audio_filename,
-        )
-        await self.storage.put_bytes(
-            audio_key,
-            audio_data,
-            content_type=audio_content_type,
-            metadata={"interviewId": interview.id, "questionId": question_id},
-        )
-        video_key = self._media_key(
-            candidate_id=interview.candidate_id,
-            interview_id=interview.id,
-            question_id=question_id,
-            kind="video",
-            filename=video_filename,
-        )
-        await self.storage.put_bytes(
-            video_key,
-            video_data,
-            content_type=video_content_type,
-            metadata={"interviewId": interview.id, "questionId": question_id},
-        )
-
         transcript = await self.ai.transcribe(
             audio_data, content_type=audio_content_type, language=language
         )
         if not transcript.strip():
             raise WorkflowProviderError("The speech model returned an empty transcript.")
+        audio_key = self._answer_media_key(
+            interview=interview,
+            question_id=current.id,
+            kind="audio",
+            filename=audio_filename,
+        )
+        video_key = self._answer_media_key(
+            interview=interview,
+            question_id=current.id,
+            kind="video",
+            filename=video_filename,
+        )
+        await self.storage.put_bytes(
+            audio_key,
+            audio_data,
+            content_type=audio_content_type,
+            metadata={"interviewId": interview.id, "questionId": current.id},
+        )
+        await self.storage.put_bytes(
+            video_key,
+            video_data,
+            content_type=video_content_type,
+            metadata={"interviewId": interview.id, "questionId": current.id},
+        )
         answer = await self.repository.add_answer(
             interview_id=interview.id,
             question_id=current.id,
             transcript=transcript.strip(),
             duration_seconds=duration_seconds,
-        )
-        await self.repository.add_media_asset(
             candidate_id=interview.candidate_id,
-            interview_id=interview.id,
-            answer_id=answer.id,
-            question_id=current.id,
-            kind="audio",
-            object_key=audio_key,
-            filename=self._safe_filename(audio_filename),
-            content_type=audio_content_type,
-            size_bytes=len(audio_data),
+            audio_object_key=audio_key,
+            audio_filename=self._safe_filename(audio_filename),
+            audio_content_type=audio_content_type,
+            audio_size_bytes=len(audio_data),
+            video_object_key=video_key,
+            video_filename=self._safe_filename(video_filename),
+            video_content_type=video_content_type,
+            video_size_bytes=len(video_data),
         )
-        await self.repository.add_media_asset(
-            candidate_id=interview.candidate_id,
-            interview_id=interview.id,
-            answer_id=answer.id,
-            question_id=current.id,
-            kind="video",
-            object_key=video_key,
-            filename=self._safe_filename(video_filename),
-            content_type=video_content_type,
-            size_bytes=len(video_data),
-        )
+        transcript = answer.transcript
 
         candidate = await self.repository.get_candidate(interview.candidate_id)
         position = await self.repository.get_position(candidate.position_id)
@@ -588,7 +599,7 @@ class WorkflowService:
                 interview_id=interview.id,
                 status=interview.status,
             )
-        if interview.status != "in_progress":
+        if interview.status not in {"in_progress", "error"}:
             raise WorkflowConflictError("Interview cannot be completed in its current state.")
         answers = await self.repository.list_answers_with_questions(interview.id)
         if not answers:
@@ -621,26 +632,34 @@ class WorkflowService:
             self._sanitize_analysis_evidence(draft, analysis_input)
             transcript = self._render_transcript(candidate, position, answers)
             transcript_key = f"candidates/{candidate.id}/interviews/{interview.id}/transcript.txt"
-            await self.storage.put_bytes(
-                transcript_key,
-                transcript.encode("utf-8"),
-                content_type="text/plain; charset=utf-8",
+            existing_transcript = await self.repository.find_interview_media(
+                interview_id=interview.id, kind="transcript"
             )
-            await self.repository.add_media_asset(
-                candidate_id=candidate.id,
-                interview_id=interview.id,
-                answer_id=None,
-                question_id=None,
-                kind="transcript",
-                object_key=transcript_key,
-                filename="interview-transcript.txt",
-                content_type="text/plain; charset=utf-8",
-                size_bytes=len(transcript.encode("utf-8")),
-            )
+            if existing_transcript is None:
+                transcript_bytes = transcript.encode("utf-8")
+                await self.storage.put_bytes(
+                    transcript_key,
+                    transcript_bytes,
+                    content_type="text/plain; charset=utf-8",
+                )
+                await self.repository.add_media_asset(
+                    candidate_id=candidate.id,
+                    interview_id=interview.id,
+                    answer_id=None,
+                    question_id=None,
+                    kind="transcript",
+                    object_key=transcript_key,
+                    filename="interview-transcript.txt",
+                    content_type="text/plain; charset=utf-8",
+                    size_bytes=len(transcript_bytes),
+                )
             await self.repository.replace_analysis(candidate_id=candidate.id, draft=draft)
             interview = await self.repository.set_interview_status(
                 interview.id, "completed", completed_at=self._now()
             )
+        except CancelledError:
+            await self.repository.set_interview_status(interview.id, "error")
+            raise
         except Exception:
             await self.repository.set_interview_status(interview.id, "error")
             raise
@@ -819,6 +838,7 @@ class WorkflowService:
             deadline_at=interview.deadline_at,
             remaining_seconds=self._remaining_seconds(interview, self._now()),
             current_question=self._public_question(current),
+            answered_question_ids=await self.repository.list_answered_question_ids(interview.id),
         )
 
     async def _active_current_question(self, interview: InterviewRow) -> QuestionRow | None:
@@ -930,6 +950,64 @@ class WorkflowService:
             raise WorkflowValidationError(
                 f"Uploaded {label} is too large.", details={"maxBytes": maximum}
             )
+
+    async def _ensure_answer_media(
+        self,
+        *,
+        interview: InterviewRow,
+        answer: AnswerRow,
+        question_id: str,
+        audio_data: bytes,
+        audio_filename: str,
+        audio_content_type: str,
+        video_data: bytes,
+        video_filename: str,
+        video_content_type: str,
+    ) -> None:
+        media = (
+            ("audio", audio_data, audio_filename, audio_content_type),
+            ("video", video_data, video_filename, video_content_type),
+        )
+        for kind, data, filename, content_type in media:
+            if await self.repository.find_answer_media(answer_id=answer.id, kind=kind) is not None:
+                continue
+            object_key = self._answer_media_key(
+                interview=interview,
+                question_id=question_id,
+                kind=kind,
+                filename=filename,
+            )
+            await self.storage.put_bytes(
+                object_key,
+                data,
+                content_type=content_type,
+                metadata={"interviewId": interview.id, "questionId": question_id},
+            )
+            await self.repository.add_media_asset(
+                candidate_id=interview.candidate_id,
+                interview_id=interview.id,
+                answer_id=answer.id,
+                question_id=question_id,
+                kind=kind,
+                object_key=object_key,
+                filename=self._safe_filename(filename),
+                content_type=content_type,
+                size_bytes=len(data),
+            )
+
+    def _answer_media_key(
+        self,
+        *,
+        interview: InterviewRow,
+        question_id: str,
+        kind: str,
+        filename: str,
+    ) -> str:
+        extension = Path(self._safe_filename(filename)).suffix.lower()[:12]
+        return (
+            f"candidates/{interview.candidate_id}/interviews/{interview.id}/"
+            f"questions/{question_id}/{kind}{extension}"
+        )
 
     @staticmethod
     def parse_lines(value: str | None) -> list[str]:

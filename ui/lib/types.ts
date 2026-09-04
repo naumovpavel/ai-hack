@@ -17,6 +17,7 @@ export type ProcessingStatus =
   | 'not_started'
   | 'questions_draft'
   | 'invited'
+  | 'in_progress'
   | 'recorded'
   | 'transcribing'
   | 'analyzing'
@@ -136,6 +137,7 @@ export type InterviewState = {
   deadlineAt: string | null;
   remainingSeconds: number;
   currentQuestion: PublicQuestion | null;
+  answeredQuestionIds: string[];
 };
 
 export type AnswerResult = {

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -15,11 +15,12 @@ from sqlalchemy.pool import StaticPool
 
 from interview_api.config import Settings
 from interview_api.main import create_app
-from interview_api.workflow.ai import DeterministicWorkflowAI, FollowUpProposal
+from interview_api.workflow.ai import AnalysisDraft, DeterministicWorkflowAI, FollowUpProposal
+from interview_api.workflow.errors import WorkflowProviderError
 from interview_api.workflow.openrouter import OpenRouterWorkflowAI
 from interview_api.workflow.repository import SqlAlchemyWorkflowRepository
 from interview_api.workflow.service import WorkflowService
-from interview_api.workflow.storage import MemoryObjectStorage
+from interview_api.workflow.storage import MemoryObjectStorage, StoredObject
 
 
 @dataclass
@@ -54,6 +55,52 @@ class FollowUpWorkflowAI(DeterministicWorkflowAI):
             topic=topic,
             competency=topic,
             reason="Нужен проверяемый пример",
+        )
+
+
+class FailOnceAnalysisAI(FollowUpWorkflowAI):
+    def __init__(self) -> None:
+        super().__init__()
+        self.analysis_attempts = 0
+
+    async def analyze(
+        self,
+        *,
+        vacancy_text: str,
+        requirements: list[str],
+        questions_and_answers: list[dict[str, object]],
+    ) -> AnalysisDraft:
+        self.analysis_attempts += 1
+        if self.analysis_attempts == 1:
+            raise WorkflowProviderError("Temporary analysis failure")
+        return await super().analyze(
+            vacancy_text=vacancy_text,
+            requirements=requirements,
+            questions_and_answers=questions_and_answers,
+        )
+
+
+class FailOnceVideoStorage(MemoryObjectStorage):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failed = False
+
+    async def put_bytes(
+        self,
+        key: str,
+        data: bytes,
+        *,
+        content_type: str,
+        metadata: Mapping[str, str] | None = None,
+    ) -> StoredObject:
+        if not self.failed and "/video." in key:
+            self.failed = True
+            raise WorkflowProviderError("Temporary video storage failure")
+        return await super().put_bytes(
+            key,
+            data,
+            content_type=content_type,
+            metadata=metadata,
         )
 
 
@@ -168,6 +215,36 @@ def test_create_app_exposes_workflow_with_credentialed_cors(
     assert response.headers["access-control-allow-credentials"] == "true"
 
 
+def test_workflow_reuses_openrouter_stt_for_legacy_transcription_endpoint(
+    workflow_client: tuple[TestClient, WorkflowService, MutableClock],
+) -> None:
+    client, _service, _clock = workflow_client
+
+    response = client.post(
+        "/api/v1/transcriptions",
+        files={"audio": ("answer.webm", b"TEXT:Legacy endpoint answer", "audio/webm")},
+        data={"language": "ru"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["text"] == "Legacy endpoint answer"
+    assert response.json()["meta"]["provider"] == "openrouter-workflow"
+
+
+def test_demo_session_endpoints_are_disabled_in_production(
+    workflow_client: tuple[TestClient, WorkflowService, MutableClock],
+) -> None:
+    client, _service, _clock = workflow_client
+    settings = client.app.state.settings
+    previous_environment = settings.app_env
+    settings.app_env = "production"
+    try:
+        assert client.get("/api/v1/dev/users").status_code == 404
+        assert client.post("/api/v1/dev/session", json={"userId": "hr-demo"}).status_code == 404
+    finally:
+        settings.app_env = previous_environment
+
+
 def test_briefing_reports_when_follow_ups_are_disabled(
     workflow_client: tuple[TestClient, WorkflowService, MutableClock],
 ) -> None:
@@ -177,9 +254,7 @@ def test_briefing_reports_when_follow_ups_are_disabled(
     )
     approval = client.post(f"/api/v1/candidates/{candidate_id}/questions/approve").json()
 
-    briefing = client.post(
-        "/api/v1/invites/resolve", json={"token": approval["inviteToken"]}
-    )
+    briefing = client.post("/api/v1/invites/resolve", json={"token": approval["inviteToken"]})
 
     assert briefing.status_code == 200
     assert briefing.json()["allowsFollowUps"] is False
@@ -192,9 +267,7 @@ def test_answer_finishing_at_deadline_is_saved_and_ends_interview(
     _position_id, candidate_id, _questions = _create_hr_position_and_candidate(client)
     approval = client.post(f"/api/v1/candidates/{candidate_id}/questions/approve").json()
     assert (
-        client.post(
-            "/api/v1/invites/resolve", json={"token": approval["inviteToken"]}
-        ).status_code
+        client.post("/api/v1/invites/resolve", json={"token": approval["inviteToken"]}).status_code
         == 200
     )
     interview_id = approval["interviewId"]
@@ -224,6 +297,8 @@ def test_answer_finishing_at_deadline_is_saved_and_ends_interview(
     assert answer.status_code == 200, answer.text
     assert answer.json()["nextQuestion"] is None
     assert answer.json()["remainingSeconds"] == 0
+    state = client.get(f"/api/v1/interviews/{interview_id}/state").json()
+    assert state["answeredQuestionIds"] == [question_id]
     completed = client.post(f"/api/v1/interviews/{interview_id}/complete")
     assert completed.status_code == 200, completed.text
     assert client.get("/api/v1/candidate/interview").json()["currentQuestion"] is None
@@ -233,6 +308,8 @@ def test_full_hr_candidate_workflow_with_review_and_decision_gate(
     workflow_client: tuple[TestClient, WorkflowService, MutableClock],
 ) -> None:
     client, service, clock = workflow_client
+    service.ai = FailOnceAnalysisAI()
+    service.storage = FailOnceVideoStorage()
 
     assert client.get("/api/v1/session").status_code == 404
     _position_id, candidate_id, questions = _create_hr_position_and_candidate(client)
@@ -267,6 +344,13 @@ def test_full_hr_candidate_workflow_with_review_and_decision_gate(
     current = started.json()["currentQuestion"]
     assert current is not None
 
+    assert client.post("/api/v1/dev/session", json={"userId": "hr-demo"}).status_code == 200
+    assert (
+        client.get(f"/api/v1/candidates/{candidate_id}").json()["processingStatus"]
+        == "in_progress"
+    )
+    assert client.post("/api/v1/invites/resolve", json={"token": invite_token}).status_code == 200
+
     speech = client.get(f"/api/v1/interviews/{interview_id}/questions/{current['id']}/speech")
     assert speech.status_code == 200
     assert speech.content.startswith(b"RIFF")
@@ -287,12 +371,34 @@ def test_full_hr_candidate_workflow_with_review_and_decision_gate(
                 "video": ("answer-video.webm", b"video-bytes", "video/webm"),
             },
         )
+        if len(submitted_questions) == 1:
+            assert answer.status_code == 502
+            interrupted_state = client.get(
+                f"/api/v1/interviews/{interview_id}/state"
+            ).json()
+            assert interrupted_state["answeredQuestionIds"] == []
+            assert interrupted_state["currentQuestion"]["id"] == current["id"]
+            answer = client.post(
+                f"/api/v1/interviews/{interview_id}/answers",
+                data={"questionId": current["id"], "durationSeconds": "12"},
+                files={
+                    "audio": (
+                        "answer.webm",
+                        "TEXT:Подтверждённый ответ 1 про Python".encode(),
+                        "audio/webm",
+                    ),
+                    "video": ("answer-video.webm", b"video-bytes", "video/webm"),
+                },
+            )
         assert answer.status_code == 200, answer.text
         assert answer.json()["transcript"].startswith("Подтверждённый ответ")
         follow_up_was_added = follow_up_was_added or answer.json()["followUpAdded"]
         current = answer.json()["nextQuestion"]
     assert follow_up_was_added
     assert len(submitted_questions) == 3
+
+    failed_completion = client.post(f"/api/v1/interviews/{interview_id}/complete")
+    assert failed_completion.status_code == 502
 
     completed = client.post(f"/api/v1/interviews/{interview_id}/complete")
     assert completed.status_code == 200, completed.text
@@ -306,10 +412,7 @@ def test_full_hr_candidate_workflow_with_review_and_decision_gate(
 
     late_reissue = client.post(f"/api/v1/candidates/{candidate_id}/questions/approve")
     assert late_reissue.status_code == 409
-    assert (
-        client.get(f"/api/v1/candidates/{candidate_id}").json()["processingStatus"]
-        == "ready"
-    )
+    assert client.get(f"/api/v1/candidates/{candidate_id}").json()["processingStatus"] == "ready"
 
     analysis = client.get(f"/api/v1/candidates/{candidate_id}/analysis")
     assert analysis.status_code == 200, analysis.text
@@ -390,10 +493,7 @@ def test_full_hr_candidate_workflow_with_review_and_decision_gate(
     assert decision.status_code == 200, decision.text
     assert client.get(f"/api/v1/candidates/{candidate_id}").json()["processingStatus"] == "ready"
 
-    assert (
-        client.post("/api/v1/invites/resolve", json={"token": invite_token}).status_code
-        == 200
-    )
+    assert client.post("/api/v1/invites/resolve", json={"token": invite_token}).status_code == 200
     outcome = client.get("/api/v1/candidate/outcome")
     assert outcome.status_code == 200
     assert outcome.json()["status"] == "rejected"
@@ -454,6 +554,7 @@ async def test_openrouter_audio_endpoints_use_current_wire_contract() -> None:
     }
     tts_url, tts_body, _tts_headers = pool.requests[1]
     assert tts_url.endswith("/audio/speech")
-    assert json.loads(tts_body)["response_format"] == "mp3"
+    tts_payload = json.loads(tts_body)
+    assert tts_payload["response_format"] == "mp3"
     assert audio == b"mp3-bytes"
     assert content_type == "audio/mpeg"

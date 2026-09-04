@@ -415,7 +415,11 @@ class OpenRouterWorkflowAI:
                     "type": "json_schema",
                     "json_schema": {"name": schema_name, "strict": True, "schema": schema},
                 },
-                "provider": {"require_parameters": True, "data_collection": "deny"},
+                "provider": {
+                    "require_parameters": True,
+                    "data_collection": "deny",
+                    "zdr": True,
+                },
             },
             ensure_ascii=False,
         ).encode("utf-8")

@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from interview_api.workflow.ai import AnalysisDraft, QuestionProposal
@@ -60,6 +60,27 @@ class SqlAlchemyWorkflowRepository:
                         email="hr@example.test",
                     )
                 )
+
+    async def recover_interrupted_analyses(self) -> int:
+        async with self._sessions.begin() as session:
+            candidate_ids = list(
+                await session.scalars(
+                    select(InterviewRow.candidate_id).where(InterviewRow.status == "analyzing")
+                )
+            )
+            if not candidate_ids:
+                return 0
+            await session.execute(
+                update(InterviewRow)
+                .where(InterviewRow.status == "analyzing")
+                .values(status="error")
+            )
+            await session.execute(
+                update(CandidateRow)
+                .where(CandidateRow.id.in_(candidate_ids))
+                .values(processing_status="error")
+            )
+            return len(candidate_ids)
 
     async def list_users(self) -> list[UserRow]:
         async with self._sessions() as session:
@@ -414,6 +435,9 @@ class SqlAlchemyWorkflowRepository:
                 row.consent_at = started_at
                 row.started_at = started_at
                 row.deadline_at = deadline_at
+                candidate = await session.get(CandidateRow, row.candidate_id)
+                if candidate is not None:
+                    candidate.processing_status = "in_progress"
             elif row.status != "in_progress":
                 raise WorkflowConflictError("Interview cannot be started in its current state.")
         return row
@@ -515,23 +539,77 @@ class SqlAlchemyWorkflowRepository:
         question_id: str,
         transcript: str,
         duration_seconds: int | None,
+        candidate_id: str,
+        audio_object_key: str,
+        audio_filename: str,
+        audio_content_type: str,
+        audio_size_bytes: int,
+        video_object_key: str,
+        video_filename: str,
+        video_content_type: str,
+        video_size_bytes: int,
     ) -> AnswerRow:
-        row = AnswerRow(
-            id=new_id(),
-            interview_id=interview_id,
-            question_id=question_id,
-            transcript=transcript,
-            duration_seconds=duration_seconds,
-        )
         async with self._sessions.begin() as session:
-            session.add(row)
-            candidate = await session.scalar(
-                select(CandidateRow)
-                .join(InterviewRow, InterviewRow.candidate_id == CandidateRow.id)
-                .where(InterviewRow.id == interview_id)
+            interview = await session.get(InterviewRow, interview_id, with_for_update=True)
+            if interview is None:
+                raise WorkflowNotFoundError(details={"interviewId": interview_id})
+            existing = await session.scalar(
+                select(AnswerRow).where(
+                    AnswerRow.interview_id == interview_id,
+                    AnswerRow.question_id == question_id,
+                )
             )
+            row = existing
+            if row is None:
+                row = AnswerRow(
+                    id=new_id(),
+                    interview_id=interview_id,
+                    question_id=question_id,
+                    transcript=transcript,
+                    duration_seconds=duration_seconds,
+                )
+                session.add(row)
+            media_specs = (
+                (
+                    "audio",
+                    audio_object_key,
+                    audio_filename,
+                    audio_content_type,
+                    audio_size_bytes,
+                ),
+                (
+                    "video",
+                    video_object_key,
+                    video_filename,
+                    video_content_type,
+                    video_size_bytes,
+                ),
+            )
+            for kind, object_key, filename, content_type, size_bytes in media_specs:
+                media_exists = await session.scalar(
+                    select(MediaAssetRow.id).where(
+                        MediaAssetRow.answer_id == row.id,
+                        MediaAssetRow.kind == kind,
+                    )
+                )
+                if media_exists is None:
+                    session.add(
+                        MediaAssetRow(
+                            id=new_id(),
+                            candidate_id=candidate_id,
+                            interview_id=interview_id,
+                            answer_id=row.id,
+                            question_id=question_id,
+                            kind=kind,
+                            object_key=object_key,
+                            filename=filename,
+                            content_type=content_type,
+                            size_bytes=size_bytes,
+                        )
+                    )
+            candidate = await session.get(CandidateRow, candidate_id)
             if candidate is not None:
-                candidate.processing_status = "recorded"
+                candidate.processing_status = "in_progress"
         return row
 
     async def get_answer_for_question(
@@ -542,6 +620,22 @@ class SqlAlchemyWorkflowRepository:
                 select(AnswerRow).where(
                     AnswerRow.interview_id == interview_id,
                     AnswerRow.question_id == question_id,
+                )
+            )
+
+    async def list_answered_question_ids(self, interview_id: str) -> list[str]:
+        async with self._sessions() as session:
+            rows = await session.scalars(
+                select(AnswerRow.question_id).where(AnswerRow.interview_id == interview_id)
+            )
+            return list(rows)
+
+    async def find_answer_media(self, *, answer_id: str, kind: str) -> MediaAssetRow | None:
+        async with self._sessions() as session:
+            return await session.scalar(
+                select(MediaAssetRow).where(
+                    MediaAssetRow.answer_id == answer_id,
+                    MediaAssetRow.kind == kind,
                 )
             )
 
@@ -570,19 +664,29 @@ class SqlAlchemyWorkflowRepository:
         content_type: str,
         size_bytes: int,
     ) -> MediaAssetRow:
-        row = MediaAssetRow(
-            id=new_id(),
-            candidate_id=candidate_id,
-            interview_id=interview_id,
-            answer_id=answer_id,
-            question_id=question_id,
-            kind=kind,
-            object_key=object_key,
-            filename=filename,
-            content_type=content_type,
-            size_bytes=size_bytes,
-        )
         async with self._sessions.begin() as session:
+            if answer_id is not None:
+                await session.get(AnswerRow, answer_id, with_for_update=True)
+                existing = await session.scalar(
+                    select(MediaAssetRow).where(
+                        MediaAssetRow.answer_id == answer_id,
+                        MediaAssetRow.kind == kind,
+                    )
+                )
+                if existing is not None:
+                    return existing
+            row = MediaAssetRow(
+                id=new_id(),
+                candidate_id=candidate_id,
+                interview_id=interview_id,
+                answer_id=answer_id,
+                question_id=question_id,
+                kind=kind,
+                object_key=object_key,
+                filename=filename,
+                content_type=content_type,
+                size_bytes=size_bytes,
+            )
             session.add(row)
         return row
 
@@ -607,9 +711,7 @@ class SqlAlchemyWorkflowRepository:
                 )
             )
 
-    async def find_interview_media(
-        self, *, interview_id: str, kind: str
-    ) -> MediaAssetRow | None:
+    async def find_interview_media(self, *, interview_id: str, kind: str) -> MediaAssetRow | None:
         async with self._sessions() as session:
             return await session.scalar(
                 select(MediaAssetRow).where(
@@ -638,7 +740,7 @@ class SqlAlchemyWorkflowRepository:
                     "analyzing": "analyzing",
                     "completed": "ready",
                     "error": "error",
-                    "in_progress": "recorded",
+                    "in_progress": "in_progress",
                 }.get(status, candidate.processing_status)
         return row
 

@@ -191,6 +191,9 @@ class AnswerRow(WorkflowBase):
 
 class MediaAssetRow(WorkflowBase):
     __tablename__ = "workflow_media_assets"
+    __table_args__ = (
+        UniqueConstraint("answer_id", "kind", name="uq_workflow_media_answer_kind"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     candidate_id: Mapped[str] = mapped_column(

@@ -34,6 +34,7 @@ from interview_api.workflow.openrouter import OpenRouterWorkflowAI
 from interview_api.workflow.repository import SqlAlchemyWorkflowRepository
 from interview_api.workflow.service import WorkflowService
 from interview_api.workflow.storage import S3ObjectStorage
+from interview_api.workflow.transcription import WorkflowTranscriptionProvider
 
 logger = logging.getLogger(__name__)
 
@@ -73,8 +74,10 @@ def create_app(
         else ""
     )
     if (
-        question_generation_service is None or answer_evaluation_service is None
-    ) and api_key and proxy_url:
+        (question_generation_service is None or answer_evaluation_service is None)
+        and api_key
+        and proxy_url
+    ):
         managed_openrouter_client = OpenRouterClient(
             api_key=api_key,
             proxy_url=proxy_url,
@@ -100,9 +103,9 @@ def create_app(
                 judge_workers=resolved_settings.interview_judge_workers,
             )
         )
-    if (
-        question_generation_service is None or answer_evaluation_service is None
-    ) and bool(api_key) != bool(proxy_url):
+    if (question_generation_service is None or answer_evaluation_service is None) and bool(
+        api_key
+    ) != bool(proxy_url):
         logger.warning(
             "OpenRouter services are disabled: OPENAI_API_KEY and "
             "OPENAI_PROXY_URL must both be configured"
@@ -180,7 +183,6 @@ def create_app(
                 max_document_bytes=resolved_settings.max_document_bytes,
                 max_document_characters=resolved_settings.max_document_characters,
                 max_audio_bytes=resolved_settings.max_audio_bytes,
-                required_review_seconds=resolved_settings.review_seconds_per_item,
                 cookie_secure=resolved_settings.workflow_cookie_secure,
                 cookie_name=resolved_settings.session_cookie_name,
                 session_ttl_hours=resolved_settings.session_ttl_hours,
@@ -190,6 +192,12 @@ def create_app(
             logger.warning(
                 "Persistent workflow is disabled: configure OPENROUTER_API_KEY and S3 credentials"
             )
+
+    if transcription_service is None and workflow_service is not None:
+        transcription_service = TranscriptionService(
+            provider=WorkflowTranscriptionProvider(workflow_service.ai),
+            max_audio_bytes=resolved_settings.max_audio_bytes,
+        )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
