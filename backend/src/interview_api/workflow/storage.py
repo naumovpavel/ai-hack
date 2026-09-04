@@ -35,6 +35,7 @@ class ObjectStorage(Protocol):
         *,
         filename: str,
         expires_seconds: int = 900,
+        inline: bool = False,
     ) -> str: ...
 
 
@@ -117,6 +118,7 @@ class S3ObjectStorage:
         *,
         filename: str,
         expires_seconds: int = 900,
+        inline: bool = False,
     ) -> str:
         self._validate_key(key)
         try:
@@ -126,7 +128,9 @@ class S3ObjectStorage:
                 Params={
                     "Bucket": self.bucket,
                     "Key": key,
-                    "ResponseContentDisposition": self._content_disposition(filename),
+                    "ResponseContentDisposition": self._content_disposition(
+                        filename, inline=inline
+                    ),
                 },
                 ExpiresIn=expires_seconds,
             )
@@ -141,11 +145,12 @@ class S3ObjectStorage:
             raise ValueError("Unsafe object key")
 
     @staticmethod
-    def _content_disposition(filename: str) -> str:
+    def _content_disposition(filename: str, *, inline: bool = False) -> str:
         safe = "".join(
             character for character in filename if character.isalnum() or character in ".-_ "
         )
-        return f'attachment; filename="{(safe or "download").strip()}"'
+        disposition = "inline" if inline else "attachment"
+        return f'{disposition}; filename="{(safe or "download").strip()}"'
 
 
 class MemoryObjectStorage:
@@ -181,8 +186,10 @@ class MemoryObjectStorage:
         *,
         filename: str,
         expires_seconds: int = 900,
+        inline: bool = False,
     ) -> str:
         del expires_seconds
         if key not in self.objects:
             raise WorkflowNotFoundError(details={"objectKey": key})
-        return f"memory://workflow/{key}?filename={filename}"
+        disposition = "inline" if inline else "attachment"
+        return f"memory://workflow/{key}?filename={filename}&disposition={disposition}"

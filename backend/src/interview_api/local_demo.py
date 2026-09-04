@@ -27,7 +27,7 @@ from interview_api.workflow.storage import StoredObject
 class LocalObjectStorage:
     def __init__(self, root: Path) -> None:
         self.root = root.resolve()
-        self._downloads: dict[str, tuple[str, str]] = {}
+        self._downloads: dict[str, tuple[str, str, bool]] = {}
 
     async def ensure_bucket(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -56,19 +56,24 @@ class LocalObjectStorage:
         return self._path(key).read_bytes()
 
     async def presign_download(
-        self, key: str, *, filename: str, expires_seconds: int = 900
+        self,
+        key: str,
+        *,
+        filename: str,
+        expires_seconds: int = 900,
+        inline: bool = False,
     ) -> str:
         del expires_seconds
         token = secrets.token_urlsafe(24)
-        self._downloads[token] = (key, filename)
+        self._downloads[token] = (key, filename, inline)
         return f"http://127.0.0.1:8000/api/v1/local-media/{quote(token)}"
 
-    def resolve_download(self, token: str) -> tuple[Path, str]:
+    def resolve_download(self, token: str) -> tuple[Path, str, bool]:
         try:
-            key, filename = self._downloads[token]
+            key, filename, inline = self._downloads[token]
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Download expired") from exc
-        return self._path(key), filename
+        return self._path(key), filename, inline
 
 
 settings = Settings(app_env="test", _env_file=None)
@@ -109,7 +114,11 @@ app = create_app(
 
 @app.get("/api/v1/local-media/{token}", include_in_schema=False)
 async def local_media(token: str) -> FileResponse:
-    path, filename = storage.resolve_download(token)
+    path, filename, inline = storage.resolve_download(token)
     if not path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(path, filename=filename)
+    return FileResponse(
+        path,
+        filename=filename,
+        content_disposition_type="inline" if inline else "attachment",
+    )

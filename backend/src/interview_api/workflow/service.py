@@ -13,7 +13,12 @@ from urllib.parse import quote
 from interview_api.domain.models import DocumentInput
 from interview_api.providers.document_text import PdfDocxTextExtractor
 from interview_api.providers.interfaces import DocumentTextExtractor
-from interview_api.workflow.ai import AnalysisDraft, AnalysisItemDraft, WorkflowAIGateway
+from interview_api.workflow.ai import (
+    AnalysisDraft,
+    AnalysisItemDraft,
+    WorkflowAIGateway,
+    WorkflowTranscript,
+)
 from interview_api.workflow.entities import (
     AnalysisItemRow,
     AnalysisRow,
@@ -37,6 +42,7 @@ from interview_api.workflow.errors import (
 )
 from interview_api.workflow.repository import SqlAlchemyWorkflowRepository
 from interview_api.workflow.schemas import (
+    AnalysisEvidenceResponse,
     AnalysisItemResponse,
     AnalysisResponse,
     AnswerResponse,
@@ -458,9 +464,10 @@ class WorkflowService:
                 "Answers must be submitted in interview order.",
                 details={"expectedQuestionId": current.id},
             )
-        transcript = await self.ai.transcribe(
+        transcription = await self.ai.transcribe(
             audio_data, content_type=audio_content_type, language=language
         )
+        transcript = transcription.text.strip()
         if not transcript.strip():
             raise WorkflowProviderError("The speech model returned an empty transcript.")
         audio_key = self._answer_media_key(
@@ -487,10 +494,36 @@ class WorkflowService:
             content_type=video_content_type,
             metadata={"interviewId": interview.id, "questionId": current.id},
         )
+        alignment_key: str | None = None
+        alignment_bytes: bytes | None = None
+        alignment = self._build_word_alignment(
+            WorkflowTranscript(text=transcript, words=transcription.words),
+            duration_seconds=duration_seconds,
+        )
+        if alignment["words"]:
+            candidate_key = self._answer_media_key(
+                interview=interview,
+                question_id=current.id,
+                kind="alignment",
+                filename="alignment.json",
+            )
+            candidate_bytes = json.dumps(alignment, ensure_ascii=False).encode("utf-8")
+            try:
+                await self.storage.put_bytes(
+                    candidate_key,
+                    candidate_bytes,
+                    content_type="application/json",
+                    metadata={"interviewId": interview.id, "questionId": current.id},
+                )
+            except (OSError, WorkflowProviderError):
+                pass
+            else:
+                alignment_key = candidate_key
+                alignment_bytes = candidate_bytes
         answer = await self.repository.add_answer(
             interview_id=interview.id,
             question_id=current.id,
-            transcript=transcript.strip(),
+            transcript=transcript,
             duration_seconds=duration_seconds,
             candidate_id=interview.candidate_id,
             audio_object_key=audio_key,
@@ -501,6 +534,9 @@ class WorkflowService:
             video_filename=self._safe_filename(video_filename),
             video_content_type=video_content_type,
             video_size_bytes=len(video_data),
+            alignment_object_key=alignment_key,
+            alignment_filename="alignment.json" if alignment_key else None,
+            alignment_size_bytes=len(alignment_bytes) if alignment_bytes is not None else None,
         )
         transcript = answer.transcript
 
@@ -629,7 +665,8 @@ class WorkflowService:
                 requirements=list(position.requirements),
                 questions_and_answers=analysis_input,
             )
-            self._sanitize_analysis_evidence(draft, analysis_input)
+            alignments = await self._load_answer_alignments(answers)
+            self._sanitize_analysis_evidence(draft, analysis_input, alignments)
             transcript = self._render_transcript(candidate, position, answers)
             transcript_key = f"candidates/{candidate.id}/interviews/{interview.id}/transcript.txt"
             existing_transcript = await self.repository.find_interview_media(
@@ -678,7 +715,7 @@ class WorkflowService:
         await self._owned_candidate(actor, candidate_id)
         assets: list[MediaAssetResponse] = []
         for row in await self.repository.list_media_assets(candidate_id):
-            if row.kind == "question_audio":
+            if row.kind in {"question_audio", "alignment"}:
                 continue
             assets.append(
                 MediaAssetResponse(
@@ -689,6 +726,13 @@ class WorkflowService:
                     size_bytes=row.size_bytes,
                     download_url=await self.storage.presign_download(
                         row.object_key, filename=row.filename
+                    ),
+                    playback_url=(
+                        await self.storage.presign_download(
+                            row.object_key, filename=row.filename, inline=True
+                        )
+                        if row.kind == "video"
+                        else None
                     ),
                     question_id=row.question_id,
                 )
@@ -850,7 +894,15 @@ class WorkflowService:
 
     async def _analysis_response(self, analysis: AnalysisRow, user_id: str) -> AnalysisResponse:
         pairs = await self.repository.list_analysis_items_with_progress(analysis.id, user_id)
-        items = [self._analysis_item_response(item, progress) for item, progress in pairs]
+        question_ids = list({item.question_id for item, _ in pairs if item.question_id})
+        answers = await self.repository.list_answers_by_question_ids(question_ids)
+        answer_texts = {answer.question_id: answer.transcript for answer in answers}
+        items = [
+            self._analysis_item_response(
+                item, progress, answer_text=answer_texts.get(item.question_id or "")
+            )
+            for item, progress in pairs
+        ]
         review_complete = all(not item.required_review or item.review_complete for item in items)
         return AnalysisResponse(
             id=analysis.id,
@@ -872,7 +924,11 @@ class WorkflowService:
         )
 
     def _analysis_item_response(
-        self, item: AnalysisItemRow, progress: ReviewProgressRow | None
+        self,
+        item: AnalysisItemRow,
+        progress: ReviewProgressRow | None,
+        *,
+        answer_text: str | None,
     ) -> AnalysisItemResponse:
         seconds = progress.accumulated_seconds if progress is not None else 0.0
         return AnalysisItemResponse(
@@ -882,7 +938,8 @@ class WorkflowService:
             title=item.title,
             body=item.body,
             question_id=item.question_id,
-            evidence=list(item.evidence),
+            answer_text=answer_text,
+            evidence=self._analysis_evidence_responses(item.evidence, answer_text),
             required_review=item.required_review,
             reviewed_seconds=round(seconds, 2),
             review_complete=seconds >= self.required_review_seconds,
@@ -1066,11 +1123,169 @@ class WorkflowService:
         return f"{self.invite_base_url.rstrip('/')}/?invite={encoded}"
 
     @staticmethod
+    def _build_word_alignment(
+        transcript: WorkflowTranscript, *, duration_seconds: int | None
+    ) -> dict[str, object]:
+        text = transcript.text
+        cursor = 0
+        aligned: list[dict[str, object]] = []
+        for word in transcript.words:
+            needle = word.text.strip()
+            if not needle:
+                continue
+            start = text.find(needle, cursor)
+            end = start + len(needle) if start >= 0 else -1
+            if start < 0:
+                normalized = "".join(
+                    character.casefold() for character in needle if character.isalnum()
+                )
+                scan = cursor
+                while normalized and scan < len(text):
+                    while scan < len(text) and text[scan].isspace():
+                        scan += 1
+                    candidate_start = scan
+                    while scan < len(text) and not text[scan].isspace():
+                        scan += 1
+                    candidate = text[candidate_start:scan]
+                    candidate_normalized = "".join(
+                        character.casefold() for character in candidate if character.isalnum()
+                    )
+                    if candidate_normalized == normalized:
+                        start, end = candidate_start, scan
+                        break
+            if start < 0 or end <= start:
+                continue
+            aligned.append(
+                {
+                    "text": text[start:end],
+                    "start": start,
+                    "end": end,
+                    "start_seconds": word.start_seconds,
+                    "end_seconds": word.end_seconds,
+                }
+            )
+            cursor = end
+        return {
+            "version": 1,
+            "text": text,
+            "duration_seconds": duration_seconds,
+            "words": aligned,
+        }
+
+    async def _load_answer_alignments(
+        self, answers: list[tuple[AnswerRow, QuestionRow]]
+    ) -> dict[str, dict[str, object]]:
+        result: dict[str, dict[str, object]] = {}
+        for answer_value, question_value in answers:
+            asset = await self.repository.find_answer_media(
+                answer_id=answer_value.id, kind="alignment"
+            )
+            if asset is None:
+                continue
+            try:
+                data = await self.storage.get_bytes(asset.object_key)
+                payload = json.loads(data.decode("utf-8"))
+            except (
+                UnicodeError,
+                json.JSONDecodeError,
+                WorkflowNotFoundError,
+                WorkflowProviderError,
+            ):
+                continue
+            if (
+                isinstance(payload, dict)
+                and payload.get("text") == answer_value.transcript
+                and isinstance(payload.get("words"), list)
+            ):
+                result[question_value.id] = payload
+        return result
+
+    @staticmethod
+    def _clip_for_range(
+        alignment: dict[str, object] | None, start: int, end: int
+    ) -> tuple[float | None, float | None]:
+        if not alignment:
+            return None, None
+        words = alignment.get("words")
+        if not isinstance(words, list):
+            return None, None
+        overlapping: list[dict[str, object]] = []
+        for value in words:
+            if not isinstance(value, dict):
+                continue
+            word_start = value.get("start")
+            word_end = value.get("end")
+            if (
+                isinstance(word_start, int)
+                and isinstance(word_end, int)
+                and word_start < end
+                and start < word_end
+            ):
+                overlapping.append(value)
+        if not overlapping:
+            return None, None
+        try:
+            clip_start = max(0.0, float(overlapping[0]["start_seconds"]) - 0.5)
+            clip_end = float(overlapping[-1]["end_seconds"]) + 0.5
+            duration = alignment.get("duration_seconds")
+            if isinstance(duration, (int, float)) and duration >= 0:
+                clip_end = min(clip_end, float(duration))
+        except (KeyError, TypeError, ValueError):
+            return None, None
+        if clip_end <= clip_start:
+            return None, None
+        return round(clip_start, 3), round(clip_end, 3)
+
+    @staticmethod
+    def _analysis_evidence_responses(
+        evidence_values: list[dict[str, object]], answer_text: str | None
+    ) -> list[AnalysisEvidenceResponse]:
+        result: list[AnalysisEvidenceResponse] = []
+        for evidence in evidence_values:
+            quote_text = evidence.get("quote")
+            label = evidence.get("label")
+            start = evidence.get("start")
+            end = evidence.get("end")
+            if (
+                not isinstance(quote_text, str)
+                or label not in {"confirmed", "incorrect", "check"}
+                or not isinstance(start, int)
+                or not isinstance(end, int)
+                or start < 0
+                or end <= start
+                or (answer_text is not None and end > len(answer_text))
+            ):
+                continue
+            raw_clip_start = evidence.get("clip_start_seconds")
+            raw_clip_end = evidence.get("clip_end_seconds")
+            clip_start = (
+                float(raw_clip_start) if isinstance(raw_clip_start, (int, float)) else None
+            )
+            clip_end = float(raw_clip_end) if isinstance(raw_clip_end, (int, float)) else None
+            if clip_start is None or clip_end is None or clip_end <= clip_start:
+                clip_start = clip_end = None
+            result.append(
+                AnalysisEvidenceResponse(
+                    quote=quote_text,
+                    label=label,
+                    rationale=str(evidence.get("rationale", "")),
+                    start=start,
+                    end=end,
+                    clip_start_seconds=clip_start,
+                    clip_end_seconds=clip_end,
+                )
+            )
+        return result
+
+    @staticmethod
     def _sanitize_analysis_evidence(
-        draft: AnalysisDraft, questions_and_answers: list[dict[str, object]]
+        draft: AnalysisDraft,
+        questions_and_answers: list[dict[str, object]],
+        alignments: dict[str, dict[str, object]] | None = None,
     ) -> None:
         """Drop hallucinated evidence and attach exact transcript offsets."""
 
+        alignments = alignments or {}
         transcripts = {
             str(item.get("questionId", "")): str(item.get("answer", ""))
             for item in questions_and_answers
@@ -1094,7 +1309,19 @@ class WorkflowService:
                 ):
                     continue
                 occupied.append((start, end))
-                accepted.append({**evidence, "quote": quote_text, "start": start, "end": end})
+                clip_start, clip_end = WorkflowService._clip_for_range(
+                    alignments.get(item.question_id or ""), start, end
+                )
+                accepted.append(
+                    {
+                        **evidence,
+                        "quote": quote_text,
+                        "start": start,
+                        "end": end,
+                        "clip_start_seconds": clip_start,
+                        "clip_end_seconds": clip_end,
+                    }
+                )
             item.evidence = accepted
 
         # Shortcut lists are also conclusions. Mirror each one into the review

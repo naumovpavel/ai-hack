@@ -548,6 +548,9 @@ class SqlAlchemyWorkflowRepository:
         video_filename: str,
         video_content_type: str,
         video_size_bytes: int,
+        alignment_object_key: str | None = None,
+        alignment_filename: str | None = None,
+        alignment_size_bytes: int | None = None,
     ) -> AnswerRow:
         async with self._sessions.begin() as session:
             interview = await session.get(InterviewRow, interview_id, with_for_update=True)
@@ -569,7 +572,7 @@ class SqlAlchemyWorkflowRepository:
                     duration_seconds=duration_seconds,
                 )
                 session.add(row)
-            media_specs = (
+            media_specs = [
                 (
                     "audio",
                     audio_object_key,
@@ -584,7 +587,17 @@ class SqlAlchemyWorkflowRepository:
                     video_content_type,
                     video_size_bytes,
                 ),
-            )
+            ]
+            if alignment_object_key and alignment_filename and alignment_size_bytes is not None:
+                media_specs.append(
+                    (
+                        "alignment",
+                        alignment_object_key,
+                        alignment_filename,
+                        "application/json",
+                        alignment_size_bytes,
+                    )
+                )
             for kind, object_key, filename, content_type, size_bytes in media_specs:
                 media_exists = await session.scalar(
                     select(MediaAssetRow.id).where(
@@ -650,6 +663,15 @@ class SqlAlchemyWorkflowRepository:
                 .order_by(QuestionRow.order_index)
             )
             return [(answer, question) for answer, question in result.all()]
+
+    async def list_answers_by_question_ids(self, question_ids: list[str]) -> list[AnswerRow]:
+        if not question_ids:
+            return []
+        async with self._sessions() as session:
+            rows = await session.scalars(
+                select(AnswerRow).where(AnswerRow.question_id.in_(question_ids))
+            )
+            return list(rows)
 
     async def add_media_asset(
         self,

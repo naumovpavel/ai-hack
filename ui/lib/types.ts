@@ -148,6 +148,16 @@ export type AnswerResult = {
   remainingSeconds: number;
 };
 
+export type AnalysisEvidence = {
+  quote: string;
+  label: 'confirmed' | 'incorrect' | 'check';
+  rationale: string;
+  start: number;
+  end: number;
+  clipStartSeconds: number | null;
+  clipEndSeconds: number | null;
+};
+
 export type AnalysisItem = {
   id: string;
   orderIndex: number;
@@ -155,7 +165,8 @@ export type AnalysisItem = {
   title: string;
   body: string;
   questionId: string | null;
-  evidence: Array<Record<string, unknown>>;
+  answerText: string | null;
+  evidence: AnalysisEvidence[];
   requiredReview: boolean;
   reviewedSeconds: number;
   reviewComplete: boolean;
@@ -192,6 +203,7 @@ export type MediaAsset = {
   contentType: string;
   sizeBytes: number;
   downloadUrl: string;
+  playbackUrl: string | null;
   questionId: string | null;
 };
 

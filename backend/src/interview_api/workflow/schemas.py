@@ -187,6 +187,16 @@ class AnswerResponse(ApiModel):
     remaining_seconds: int
 
 
+class AnalysisEvidenceResponse(ApiModel):
+    quote: str
+    label: Literal["confirmed", "incorrect", "check"]
+    rationale: str = ""
+    start: int
+    end: int
+    clip_start_seconds: float | None = None
+    clip_end_seconds: float | None = None
+
+
 class AnalysisItemResponse(ApiModel):
     id: str
     order_index: int
@@ -194,7 +204,8 @@ class AnalysisItemResponse(ApiModel):
     title: str
     body: str
     question_id: str | None = None
-    evidence: list[dict[str, Any]]
+    answer_text: str | None = None
+    evidence: list[AnalysisEvidenceResponse]
     required_review: bool
     reviewed_seconds: float = 0
     review_complete: bool = False
@@ -231,6 +242,7 @@ class MediaAssetResponse(ApiModel):
     content_type: str
     size_bytes: int
     download_url: str
+    playback_url: str | None = None
     question_id: str | None = None
 
 

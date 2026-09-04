@@ -20,6 +20,8 @@ import {
   LoaderCircle,
   LockKeyhole,
   Plus,
+  Play,
+  RotateCcw,
   Save,
   ShieldCheck,
   Sparkles,
@@ -44,9 +46,11 @@ import { Textarea } from '@/components/ui/textarea';
 import { api, ApiError } from '@/lib/api';
 import type {
   Analysis,
+  AnalysisEvidence,
   Approval,
   CandidateDetail,
   CandidateMedia,
+  MediaAsset,
   CandidateSummary,
   DecisionInput,
   HiringDecision,
@@ -1081,12 +1085,125 @@ function QuestionApproval({
   );
 }
 
-function evidenceLabel(evidence: Record<string, unknown>) {
-  const quote = evidence.quote || evidence.text || evidence.transcript;
-  if (typeof quote === 'string') return quote;
-  return Object.entries(evidence)
-    .map(([key, value]) => `${key}: ${String(value)}`)
-    .join(' · ');
+type EvidenceClip = {
+  quote: string;
+  startSeconds: number;
+  endSeconds: number;
+  asset: MediaAsset;
+};
+
+function vttTime(seconds: number) {
+  const milliseconds = Math.max(0, Math.round(seconds * 1000));
+  const hours = Math.floor(milliseconds / 3_600_000);
+  const minutes = Math.floor((milliseconds % 3_600_000) / 60_000);
+  const remainderSeconds = Math.floor((milliseconds % 60_000) / 1000);
+  const remainderMilliseconds = milliseconds % 1000;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(remainderSeconds).padStart(2, '0')}.${String(remainderMilliseconds).padStart(3, '0')}`;
+}
+
+function clipCaptions(clip: EvidenceClip) {
+  return `data:text/vtt;charset=utf-8,${encodeURIComponent(
+    `WEBVTT\n\n${vttTime(clip.startSeconds)} --> ${vttTime(clip.endSeconds)}\n${clip.quote}\n`,
+  )}`;
+}
+
+function EvidenceAnswer({
+  answerText,
+  evidence,
+  video,
+  onPlay,
+}: {
+  answerText: string;
+  evidence: AnalysisEvidence[];
+  video: MediaAsset | undefined;
+  onPlay: (clip: EvidenceClip) => void;
+}) {
+  const candidates = [...evidence]
+    .filter(
+      (entry) =>
+        Number.isInteger(entry.start) &&
+        Number.isInteger(entry.end) &&
+        entry.start >= 0 &&
+        entry.end > entry.start &&
+        entry.end <= answerText.length,
+    )
+    .sort((left, right) => left.start - right.start || left.end - right.end);
+  const ranges: AnalysisEvidence[] = [];
+  let acceptedEnd = 0;
+  candidates.forEach((entry) => {
+    if (entry.start < acceptedEnd) return;
+    ranges.push(entry);
+    acceptedEnd = entry.end;
+  });
+
+  if (!ranges.length) {
+    return <p className="whitespace-pre-wrap">{answerText}</p>;
+  }
+
+  const parts: React.ReactNode[] = [];
+  let cursor = 0;
+  ranges.forEach((entry, index) => {
+    if (entry.start > cursor) parts.push(answerText.slice(cursor, entry.start));
+    const marked = entry.label === 'incorrect' || entry.label === 'check';
+    const canPlay =
+      marked &&
+      Boolean(video?.playbackUrl) &&
+      entry.clipStartSeconds !== null &&
+      entry.clipEndSeconds !== null &&
+      entry.clipEndSeconds > entry.clipStartSeconds;
+    const className =
+      entry.label === 'incorrect'
+        ? 'rounded bg-rose-200 px-0.5 text-rose-900 ring-1 ring-rose-300'
+        : entry.label === 'check'
+          ? 'rounded bg-rose-100/55 px-0.5 text-rose-800 ring-1 ring-rose-200/70'
+          : '';
+    const text = answerText.slice(entry.start, entry.end);
+    if (
+      canPlay &&
+      video &&
+      entry.clipStartSeconds !== null &&
+      entry.clipEndSeconds !== null
+    ) {
+      parts.push(
+        <button
+          key={`evidence-${index}`}
+          type="button"
+          className="inline cursor-pointer text-left align-baseline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          title="Воспроизвести этот фрагмент ответа"
+          onClick={() =>
+            onPlay({
+              quote: entry.quote,
+              startSeconds: entry.clipStartSeconds as number,
+              endSeconds: entry.clipEndSeconds as number,
+              asset: video,
+            })
+          }
+        >
+          <span className={className}>{text}</span>
+          <Play
+            className="ml-1 inline size-3 text-rose-700"
+            aria-hidden="true"
+          />
+        </button>,
+      );
+    } else {
+      parts.push(
+        <span
+          key={`evidence-${index}`}
+          className={className}
+          title={
+            marked ? 'Временные метки для этого ответа недоступны' : undefined
+          }
+        >
+          {text}
+        </span>,
+      );
+    }
+    cursor = entry.end;
+  });
+  if (cursor < answerText.length) parts.push(answerText.slice(cursor));
+
+  return <p className="whitespace-pre-wrap">{parts}</p>;
 }
 
 function ReviewableAnalysis({
@@ -1120,6 +1237,8 @@ function ReviewableAnalysis({
   const unlockingRecommendation = useRef(false);
   const reviewPanelRef = useRef<HTMLDivElement | null>(null);
   const [reviewPanelVisible, setReviewPanelVisible] = useState(false);
+  const [evidenceClip, setEvidenceClip] = useState<EvidenceClip | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
     reviewAnalysisRef.current = reviewAnalysis;
@@ -1228,6 +1347,21 @@ function ReviewableAnalysis({
   const activeItem = reviewAnalysis.items.find(
     (item) => item.id === activeItemId,
   );
+  const videoByQuestionId = useMemo(
+    () =>
+      new Map(
+        (media?.assets || [])
+          .filter((asset) => asset.kind === 'video' && asset.questionId)
+          .map((asset) => [asset.questionId as string, asset]),
+      ),
+    [media],
+  );
+
+  const playEvidenceClip = () => {
+    if (!evidenceClip || !videoRef.current) return;
+    videoRef.current.currentTime = evidenceClip.startSeconds;
+    void videoRef.current.play().catch(() => undefined);
+  };
 
   const preventCopiedReason = (
     event:
@@ -1387,14 +1521,68 @@ function ReviewableAnalysis({
                 <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-foreground/85">
                   {activeItem.body}
                 </p>
-                {activeItem.evidence.length ? (
+                {activeItem.answerText ? (
+                  <div className="mt-5 rounded-xl border-l-4 border-l-primary bg-background p-4 text-sm leading-7">
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      Ответ кандидата
+                    </p>
+                    <EvidenceAnswer
+                      answerText={activeItem.answerText}
+                      evidence={activeItem.evidence}
+                      video={
+                        activeItem.questionId
+                          ? videoByQuestionId.get(activeItem.questionId)
+                          : undefined
+                      }
+                      onPlay={setEvidenceClip}
+                    />
+                    {activeItem.evidence.some((entry) => entry.rationale) ? (
+                      <div className="mt-4 space-y-2 border-t pt-3">
+                        {activeItem.evidence
+                          .filter((entry) => entry.rationale)
+                          .map((entry, index) => (
+                            <p
+                              key={`${entry.start}-${entry.end}-${index}`}
+                              className="text-xs text-muted-foreground"
+                            >
+                              <span className="font-semibold text-foreground">
+                                {entry.label === 'incorrect'
+                                  ? 'Ошибка'
+                                  : entry.label === 'check'
+                                    ? 'Требуется проверка'
+                                    : 'Подтверждено'}
+                                :{' '}
+                              </span>
+                              {entry.rationale}
+                            </p>
+                          ))}
+                      </div>
+                    ) : null}
+                    {activeItem.evidence.some(
+                      (entry) =>
+                        (entry.label === 'incorrect' ||
+                          entry.label === 'check') &&
+                        (!activeItem.questionId ||
+                          !videoByQuestionId.get(activeItem.questionId)
+                            ?.playbackUrl ||
+                          entry.clipStartSeconds === null ||
+                          entry.clipEndSeconds === null),
+                    ) ? (
+                      <p className="mt-3 text-xs text-muted-foreground">
+                        Временные метки для части этого ответа недоступны;
+                        текстовая подсветка сохранена без возможности открыть
+                        видеофрагмент.
+                      </p>
+                    ) : null}
+                  </div>
+                ) : activeItem.evidence.length ? (
                   <div className="mt-5 space-y-2">
                     {activeItem.evidence.map((entry, index) => (
                       <blockquote
                         key={index}
                         className="rounded-xl border-l-4 border-l-primary bg-background p-3 text-sm leading-relaxed"
                       >
-                        {evidenceLabel(entry)}
+                        {entry.quote}
                       </blockquote>
                     ))}
                   </div>
@@ -1577,6 +1765,71 @@ function ReviewableAnalysis({
           {error}
         </p>
       ) : null}
+      <Dialog
+        open={evidenceClip !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            videoRef.current?.pause();
+            setEvidenceClip(null);
+          }
+        }}
+      >
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Фрагмент ответа кандидата</DialogTitle>
+            <DialogDescription>
+              {evidenceClip?.quote || 'Выделенный фрагмент ответа'}
+            </DialogDescription>
+          </DialogHeader>
+          {evidenceClip?.asset.playbackUrl ? (
+            <video
+              ref={videoRef}
+              className="max-h-[65vh] w-full rounded-xl bg-black"
+              controls
+              preload="metadata"
+              src={evidenceClip.asset.playbackUrl}
+              onLoadedMetadata={playEvidenceClip}
+              onTimeUpdate={(event) => {
+                if (
+                  evidenceClip &&
+                  event.currentTarget.currentTime >= evidenceClip.endSeconds
+                ) {
+                  event.currentTarget.pause();
+                  event.currentTarget.currentTime = evidenceClip.endSeconds;
+                }
+              }}
+              onPlay={(event) => {
+                if (
+                  evidenceClip &&
+                  (event.currentTarget.currentTime <
+                    evidenceClip.startSeconds ||
+                    event.currentTarget.currentTime >= evidenceClip.endSeconds)
+                ) {
+                  event.currentTarget.currentTime = evidenceClip.startSeconds;
+                }
+              }}
+              onError={() => notify('Не удалось загрузить видеофрагмент')}
+            >
+              <track
+                default
+                kind="captions"
+                src={clipCaptions(evidenceClip)}
+                srcLang="ru"
+                label="Расшифровка ответа"
+              />
+            </video>
+          ) : null}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={playEvidenceClip}>
+              <RotateCcw data-icon="inline-start" />
+              Повторить фрагмент
+            </Button>
+            <Button type="button" onClick={() => setEvidenceClip(null)}>
+              Закрыть
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

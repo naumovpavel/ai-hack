@@ -24,7 +24,7 @@ class WorkflowTranscriptionProvider:
 
         data = await asyncio.to_thread(read_audio)
         try:
-            text = await self._gateway.transcribe(
+            transcript = await self._gateway.transcribe(
                 data,
                 content_type=audio.content_type or "audio/webm",
                 language=audio.language or "ru",
@@ -32,7 +32,7 @@ class WorkflowTranscriptionProvider:
         except WorkflowProviderError as exc:
             raise ProviderResponseError(details=exc.details) from exc
         return ProviderTranscript(
-            text=text,
+            text=transcript.text,
             is_final=True,
             provider="openrouter-workflow",
         )

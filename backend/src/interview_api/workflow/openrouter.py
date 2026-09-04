@@ -15,6 +15,8 @@ from interview_api.workflow.ai import (
     AnalysisItemDraft,
     FollowUpProposal,
     QuestionProposal,
+    TranscriptWord,
+    WorkflowTranscript,
 )
 from interview_api.workflow.errors import WorkflowProviderError
 
@@ -225,7 +227,7 @@ class OpenRouterWorkflowAI:
         *,
         content_type: str,
         language: str,
-    ) -> str:
+    ) -> WorkflowTranscript:
         if not self._stt_model:
             raise WorkflowProviderError("An OpenRouter STT model is not configured.")
         extension = {
@@ -243,6 +245,8 @@ class OpenRouterWorkflowAI:
                     "format": extension,
                 },
                 "language": language,
+                "response_format": "verbose_json",
+                "timestamp_granularities": ["word"],
                 "provider": {"data_collection": "deny"},
             }
         ).encode("utf-8")
@@ -259,7 +263,27 @@ class OpenRouterWorkflowAI:
             raise WorkflowProviderError("STT returned an invalid response.") from exc
         if not text:
             raise WorkflowProviderError("STT returned an empty transcript.")
-        return text
+        words: list[TranscriptWord] = []
+        raw_words = payload.get("words")
+        if isinstance(raw_words, list):
+            for value in raw_words:
+                if not isinstance(value, dict):
+                    continue
+                try:
+                    word_text = str(value["word"])
+                    start_seconds = float(value["start"])
+                    end_seconds = float(value["end"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if word_text.strip() and 0 <= start_seconds <= end_seconds:
+                    words.append(
+                        TranscriptWord(
+                            text=word_text,
+                            start_seconds=start_seconds,
+                            end_seconds=end_seconds,
+                        )
+                    )
+        return WorkflowTranscript(text=text, words=words)
 
     async def propose_follow_up(
         self,

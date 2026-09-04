@@ -24,6 +24,19 @@ class FollowUpProposal:
     reason: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class TranscriptWord:
+    text: str
+    start_seconds: float
+    end_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowTranscript:
+    text: str
+    words: list[TranscriptWord] = field(default_factory=list)
+
+
 @dataclass(slots=True)
 class AnalysisItemDraft:
     kind: str
@@ -67,7 +80,7 @@ class WorkflowAIGateway(Protocol):
         *,
         content_type: str,
         language: str,
-    ) -> str: ...
+    ) -> WorkflowTranscript: ...
 
     async def propose_follow_up(
         self,
@@ -138,11 +151,17 @@ class DeterministicWorkflowAI:
         *,
         content_type: str,
         language: str,
-    ) -> str:
+    ) -> WorkflowTranscript:
         del content_type, language
         if audio.startswith(b"TEXT:"):
-            return audio[5:].decode("utf-8").strip()
-        return "Ответ кандидата сохранён; тестовая транскрипция недоступна."
+            text = audio[5:].decode("utf-8").strip()
+        else:
+            text = "Ответ кандидата сохранён; тестовая транскрипция недоступна."
+        words = [
+            TranscriptWord(text=word, start_seconds=index * 0.5, end_seconds=(index + 1) * 0.5)
+            for index, word in enumerate(text.split())
+        ]
+        return WorkflowTranscript(text=text, words=words)
 
     async def propose_follow_up(
         self,

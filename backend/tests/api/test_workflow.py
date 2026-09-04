@@ -15,7 +15,13 @@ from sqlalchemy.pool import StaticPool
 
 from interview_api.config import Settings
 from interview_api.main import create_app
-from interview_api.workflow.ai import AnalysisDraft, DeterministicWorkflowAI, FollowUpProposal
+from interview_api.workflow.ai import (
+    AnalysisDraft,
+    DeterministicWorkflowAI,
+    FollowUpProposal,
+    TranscriptWord,
+    WorkflowTranscript,
+)
 from interview_api.workflow.errors import WorkflowProviderError
 from interview_api.workflow.openrouter import OpenRouterWorkflowAI
 from interview_api.workflow.repository import SqlAlchemyWorkflowRepository
@@ -421,9 +427,13 @@ def test_full_hr_candidate_workflow_with_review_and_decision_gate(
     assert analysis_payload["recommendation"] is None
     assert analysis_payload["recommendationLocked"] is True
     for item in analysis_payload["items"]:
+        if item["questionId"]:
+            assert item["answerText"].startswith("Подтверждённый ответ")
         for evidence in item["evidence"]:
             assert evidence["quote"].startswith("Подтверждённый ответ")
             assert evidence["start"] >= 0
+            assert evidence["clipStartSeconds"] is not None
+            assert evidence["clipEndSeconds"] > evidence["clipStartSeconds"]
 
     media = client.get(f"/api/v1/candidates/{candidate_id}/media")
     assert media.status_code == 200
@@ -431,6 +441,12 @@ def test_full_hr_candidate_workflow_with_review_and_decision_gate(
     assert kinds.count("audio") == 3
     assert kinds.count("video") == 3
     assert "transcript" in kinds
+    assert "alignment" not in kinds
+    for asset in media.json()["assets"]:
+        if asset["kind"] == "video":
+            assert asset["playbackUrl"].endswith("disposition=inline")
+        else:
+            assert asset["playbackUrl"] is None
 
     blocked = client.post(
         f"/api/v1/candidates/{candidate_id}/decision",
@@ -528,7 +544,17 @@ class FakeAudioPool:
 async def test_openrouter_audio_endpoints_use_current_wire_contract() -> None:
     pool = FakeAudioPool(
         [
-            FakeAudioResponse(json.dumps({"text": "Привет"}).encode()),
+            FakeAudioResponse(
+                json.dumps(
+                    {
+                        "text": "Привет, мир!",
+                        "words": [
+                            {"word": "Привет", "start": 0.1, "end": 0.6},
+                            {"word": "мир", "start": 0.7, "end": 1.0},
+                        ],
+                    }
+                ).encode()
+            ),
             FakeAudioResponse(b"mp3-bytes", "audio/mpeg"),
         ]
     )
@@ -543,7 +569,11 @@ async def test_openrouter_audio_endpoints_use_current_wire_contract() -> None:
     transcript = await gateway.transcribe(b"webm-bytes", content_type="audio/webm", language="ru")
     audio, content_type = await gateway.synthesize("Вопрос", language="ru")
 
-    assert transcript == "Привет"
+    assert transcript.text == "Привет, мир!"
+    assert transcript.words == [
+        TranscriptWord(text="Привет", start_seconds=0.1, end_seconds=0.6),
+        TranscriptWord(text="мир", start_seconds=0.7, end_seconds=1.0),
+    ]
     stt_url, stt_body, stt_headers = pool.requests[0]
     assert stt_url.endswith("/audio/transcriptions")
     assert stt_headers["Content-Type"] == "application/json"
@@ -552,9 +582,38 @@ async def test_openrouter_audio_endpoints_use_current_wire_contract() -> None:
         "data": base64.b64encode(b"webm-bytes").decode("ascii"),
         "format": "webm",
     }
+    assert stt_payload["response_format"] == "verbose_json"
+    assert stt_payload["timestamp_granularities"] == ["word"]
     tts_url, tts_body, _tts_headers = pool.requests[1]
     assert tts_url.endswith("/audio/speech")
     tts_payload = json.loads(tts_body)
     assert tts_payload["response_format"] == "mp3"
     assert audio == b"mp3-bytes"
     assert content_type == "audio/mpeg"
+
+
+def test_word_alignment_handles_unicode_punctuation_and_builds_clip() -> None:
+    transcript = WorkflowTranscript(
+        text="Привет, сложный мир!",
+        words=[
+            TranscriptWord("Привет", 0.2, 0.8),
+            TranscriptWord("сложный", 0.9, 1.5),
+            TranscriptWord("мир", 1.6, 2.0),
+        ],
+    )
+
+    alignment = WorkflowService._build_word_alignment(transcript, duration_seconds=2)
+
+    assert alignment["words"] == [
+        {"text": "Привет", "start": 0, "end": 6, "start_seconds": 0.2, "end_seconds": 0.8},
+        {
+            "text": "сложный",
+            "start": 8,
+            "end": 15,
+            "start_seconds": 0.9,
+            "end_seconds": 1.5,
+        },
+        {"text": "мир", "start": 16, "end": 19, "start_seconds": 1.6, "end_seconds": 2.0},
+    ]
+    assert WorkflowService._clip_for_range(alignment, 8, 20) == (0.4, 2.0)
+    assert WorkflowService._clip_for_range(None, 8, 20) == (None, None)
