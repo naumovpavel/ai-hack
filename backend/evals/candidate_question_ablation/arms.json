@@ -1,0 +1,22 @@
+[
+  {
+    "name": "baseline",
+    "max_question_words": null,
+    "follow_up_count": 0
+  },
+  {
+    "name": "short_30_words",
+    "max_question_words": 30,
+    "follow_up_count": 0
+  },
+  {
+    "name": "short_20_words",
+    "max_question_words": 20,
+    "follow_up_count": 0
+  },
+  {
+    "name": "follow_up_1",
+    "max_question_words": null,
+    "follow_up_count": 1
+  }
+]

@@ -1,0 +1,12 @@
+[
+  {
+    "name": "baseline",
+    "max_question_words": null,
+    "follow_up_count": 0
+  },
+  {
+    "name": "follow_up_1",
+    "max_question_words": null,
+    "follow_up_count": 1
+  }
+]

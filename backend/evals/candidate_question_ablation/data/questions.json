@@ -1,0 +1,102 @@
+[
+  {
+    "question_id": "q01_motivation",
+    "question": "Расскажите, почему вы сейчас находитесь в поиске работы и что для себя ищете? Каким проектом и какими задачами хотелось бы заниматься?",
+    "rubric": [
+      {"id": "q01_reason", "criterion": "Объяснить причину поиска работы без лишнего негатива", "support": "Причина должна быть понятной и профессионально сформулированной", "required": true},
+      {"id": "q01_project", "criterion": "Описать желаемый тип проекта", "support": "Нужны конкретные характеристики проекта или предметной области", "required": true},
+      {"id": "q01_tasks", "criterion": "Назвать желаемые задачи", "support": "Ответ связывает задачи с Python/backend и требованиями вакансии", "required": true},
+      {"id": "q01_growth", "criterion": "Показать направление развития", "support": "Допустимы цели роста и ожидания от команды; личные сведения требуют проверки", "required": false}
+    ]
+  },
+  {
+    "question_id": "q02_messaging",
+    "question": "Расскажите про свой продакшн-сервис на Python с очередью — Kafka или RabbitMQ. Какие библиотеки использовали, как добивались, чтобы сообщение не потерялось и не обработалось дважды, и что делали с необработанными сообщениями?",
+    "rubric": [
+      {"id": "q02_stack", "criterion": "Назвать брокер и клиентскую библиотеку", "support": "Например, confluent-kafka/aiokafka для Kafka или aio-pika/FastStream для RabbitMQ", "required": true},
+      {"id": "q02_delivery", "criterion": "Объяснить защиту от потери", "support": "Подтверждения записи/обработки, корректный commit offset или ack; outbox закрывает атомарность БД и публикации", "required": true},
+      {"id": "q02_idempotency", "criterion": "Объяснить повторную доставку и идемпотентность", "support": "Уникальный message/event id сам по себе не устраняет дубль: нужна проверка и фиксация результата/ключ идемпотентности", "required": true},
+      {"id": "q02_failures", "criterion": "Описать retry и необрабатываемые сообщения", "support": "Ограниченные повторы с backoff, DLQ/DLT, наблюдаемость и безопасный replay", "required": true}
+    ]
+  },
+  {
+    "question_id": "q03_postgresql",
+    "question": "Как вы загружали большие объёмы данных в PostgreSQL? Назовите объёмы, как была устроена загрузка и как находили причину медленных запросов?",
+    "rubric": [
+      {"id": "q03_scale", "criterion": "Указать измеримый объём и ограничения", "support": "Ожидаются строки, гигабайты, время или частота загрузки; личные числа требуют проверки", "required": true},
+      {"id": "q03_load", "criterion": "Описать эффективную загрузку", "support": "COPY обычно быстрее одиночных INSERT; допустимы staging, батчи, транзакции и upsert по ситуации", "required": true},
+      {"id": "q03_diagnosis", "criterion": "Показать диагностику запросов", "support": "EXPLAIN (ANALYZE, BUFFERS), статистика, планы, индексы, объём выборки и spill на диск", "required": true},
+      {"id": "q03_locking", "criterion": "Корректно описать блокировки", "support": "Обычный INSERT не блокирует таблицу целиком; конкуренция зависит от строк, индексов, ограничений и типа операции", "required": false}
+    ]
+  },
+  {
+    "question_id": "q04_cicd",
+    "question": "Расскажите про CI/CD-пайплайн для Python-сервиса в контейнерах, который настраивали сами. Что делал пайплайн, как собирали Docker-образ, как деплоили и откатывались?",
+    "rubric": [
+      {"id": "q04_ci", "criterion": "Описать проверки CI", "support": "Линтеры, тесты, security/quality checks и условия запуска", "required": true},
+      {"id": "q04_image", "criterion": "Описать воспроизводимую сборку образа", "support": "Dockerfile, immutable tag/digest, registry, кэш и минимизация образа", "required": true},
+      {"id": "q04_deploy", "criterion": "Описать способ деплоя", "support": "Среды, Kubernetes/оркестратор, health checks и контролируемый rollout", "required": true},
+      {"id": "q04_rollback", "criterion": "Описать проверяемый откат", "support": "Возврат на предыдущий immutable image/revision; простой revert исходников требует нового pipeline и не является мгновенным rollback", "required": true}
+    ]
+  },
+  {
+    "question_id": "q05_async",
+    "question": "Когда выбираете асинхронный код, а когда синхронный? Опишите на примере из своего проекта. И что будет, если внутри асинхронного кода вызвать блокирующую функцию?",
+    "rubric": [
+      {"id": "q05_choice", "criterion": "Различить I/O-bound и CPU-bound задачи", "support": "asyncio полезен при большом числе ожидающих I/O; CPU-bound обычно требует процессов, native-кода или отдельного worker", "required": true},
+      {"id": "q05_loop", "criterion": "Объяснить event loop и await", "support": "Корутина добровольно отдаёт управление на await; конкурентность не означает параллельное выполнение Python-кода", "required": true},
+      {"id": "q05_blocking", "criterion": "Описать блокирующий вызов", "support": "Блокирующий вызов в event-loop thread задерживает остальные корутины; его выносят в thread/process или заменяют async-библиотекой", "required": true},
+      {"id": "q05_example", "criterion": "Дать конкретный пример и личный вклад", "support": "Личный опыт и метрики требуют проверки", "required": true}
+    ]
+  },
+  {
+    "question_id": "q06_ai",
+    "question": "Расскажите, как используете ИИ в своей работе?",
+    "rubric": [
+      {"id": "q06_cases", "criterion": "Назвать конкретные рабочие сценарии", "support": "Допустимы анализ, генерация тестов, документация, поиск ошибок и прототипирование", "required": true},
+      {"id": "q06_verification", "criterion": "Объяснить проверку результата", "support": "Код и факты проверяются тестами, review, документацией и запуском", "required": true},
+      {"id": "q06_security", "criterion": "Учитывать конфиденциальность", "support": "Нельзя отправлять закрытый код или персональные данные без разрешения и подходящей политики обработки", "required": true},
+      {"id": "q06_effect", "criterion": "Описать эффект или ограничения", "support": "Личные метрики эффективности требуют проверки", "required": false}
+    ]
+  },
+  {
+    "question_id": "q07_fastapi",
+    "question": "Как бы вы спроектировали идемпотентный REST API на FastAPI для создания платежа и защитили его под высокой нагрузкой?",
+    "rubric": [
+      {"id": "q07_contract", "criterion": "Определить контракт и валидацию", "support": "Схема запроса/ответа, коды ошибок, Pydantic-валидация и стабильная версия API", "required": true},
+      {"id": "q07_idempotency", "criterion": "Реализовать идемпотентность", "support": "Idempotency-Key связывается с запросом и сохранённым результатом под уникальным ограничением; одинаковый ключ с другим payload отклоняется", "required": true},
+      {"id": "q07_load", "criterion": "Обеспечить работу под нагрузкой", "support": "Пулы соединений, лимиты, timeouts, backpressure, горизонтальное масштабирование и отсутствие блокировок event loop", "required": true},
+      {"id": "q07_observe", "criterion": "Добавить наблюдаемость и безопасность", "support": "Метрики latency/error rate, tracing, структурные логи, auth и rate limiting", "required": true}
+    ]
+  },
+  {
+    "question_id": "q08_cqrs",
+    "question": "Как устроили бы Event Sourcing и CQRS в сервисе заказов: хранение событий, обновление read model, повторное проигрывание и эволюцию схем?",
+    "rubric": [
+      {"id": "q08_store", "criterion": "Описать event store", "support": "События неизменяемы, упорядочены по aggregate/version и добавляются с optimistic concurrency", "required": true},
+      {"id": "q08_projection", "criterion": "Описать read model", "support": "Проекции обновляются обработчиками событий и обычно согласуются eventual consistency", "required": true},
+      {"id": "q08_replay", "criterion": "Обеспечить replay", "support": "Обработчики идемпотентны; проекция может быть перестроена из истории, snapshots лишь ускоряют восстановление", "required": true},
+      {"id": "q08_schema", "criterion": "Описать эволюцию событий", "support": "Старые события не переписывают произвольно; применяют versioning, upcasters или совместимые новые события", "required": true}
+    ]
+  },
+  {
+    "question_id": "q09_etl",
+    "question": "Спроектируйте повторяемую ETL-загрузку из PostgreSQL в ClickHouse. Как обеспечите инкрементальность, дедупликацию и безопасный перезапуск?",
+    "rubric": [
+      {"id": "q09_increment", "criterion": "Задать источник инкремента", "support": "Watermark/CDC должен учитывать границы окна, поздние изменения и сохраняться после успешной загрузки", "required": true},
+      {"id": "q09_transform", "criterion": "Описать преобразование и контроль качества", "support": "Схемы, типы, null, quarantine и сверка количества/контрольных сумм", "required": true},
+      {"id": "q09_dedupe", "criterion": "Описать дедупликацию", "support": "Стабильный ключ и версия/время изменения; ReplacingMergeTree дедуплицирует во время merge и не гарантирует мгновенную уникальность", "required": true},
+      {"id": "q09_restart", "criterion": "Обеспечить безопасный replay", "support": "Идемпотентные батчи, staging/partition swap или повтор окна без продвижения checkpoint до успеха", "required": true}
+    ]
+  },
+  {
+    "question_id": "q10_k8s",
+    "question": "Как настроите деплой Python-микросервиса в Kubernetes и мониторинг так, чтобы безопасно выпускать версии и быстро замечать деградацию?",
+    "rubric": [
+      {"id": "q10_probes", "criterion": "Разделить health probes", "support": "startup защищает медленный старт, readiness управляет трафиком, liveness перезапускает зависший контейнер", "required": true},
+      {"id": "q10_resources", "criterion": "Настроить ресурсы и масштабирование", "support": "Requests/limits задаются по измерениям; HPA использует подходящие resource/custom metrics", "required": true},
+      {"id": "q10_rollout", "criterion": "Описать безопасный rollout/rollback", "support": "RollingUpdate/canary, immutable image, maxUnavailable/maxSurge и проверка метрик перед продолжением", "required": true},
+      {"id": "q10_monitoring", "criterion": "Определить мониторинг и алерты", "support": "SLI по latency, traffic, errors, saturation; алерты должны быть actionable и связаны с SLO", "required": true}
+    ]
+  }
+]
