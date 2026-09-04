@@ -1,5 +1,9 @@
 # AI Interview Backend MVP
 
+> Historical specification for the original stateless/local-model prototype.
+> The persistent OpenRouter workflow is documented in `README.md` and the root
+> `README.md`.
+
 ## Goal
 
 Build a small FastAPI backend for an AI technical interview prototype.

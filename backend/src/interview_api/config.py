@@ -18,10 +18,41 @@ class Settings(BaseSettings):
     app_name: str = "AI Interview Backend"
     app_env: Literal["local", "test", "production"] = "local"
 
+    # Persistent workflow. Docker Compose overrides the SQLite developer
+    # default with PostgreSQL and points object storage at local MinIO.
+    database_url: str = "sqlite+aiosqlite:///./signal.db"
+    database_echo: bool = False
+    s3_endpoint_url: str = "http://127.0.0.1:9000"
+    s3_public_base_url: str = "http://localhost:9000"
+    s3_access_key: SecretStr | None = None
+    s3_secret_key: SecretStr | None = None
+    s3_bucket: str = "interview-media"
+    s3_region: str = "us-east-1"
+    s3_force_path_style: bool = True
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    app_base_url: str = "http://localhost:3000"
+    workflow_invite_base_url: str = "http://localhost:3000/?invite="
+    workflow_cookie_secure: bool = False
+    session_cookie_name: str = "signal_session"
+    session_ttl_hours: int = Field(default=168, ge=1, le=24 * 90)
+    invite_ttl_days: int = Field(default=14, ge=1, le=90)
+    review_seconds_per_item: int = Field(default=10, ge=1, le=120)
+
+    # New workflow models all run through OpenRouter. OPENAI_API_KEY remains
+    # supported below for the legacy single-answer evaluator.
+    openrouter_api_key: SecretStr | None = None
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_chat_model: str = "openai/gpt-4o-mini"
+    openrouter_stt_model: str = "openai/whisper-1"
+    openrouter_tts_model: str = "google/gemini-3.1-flash-tts-preview"
+    openrouter_tts_voice: str = "Kore"
+    openrouter_http_referer: str = "http://localhost:3000"
+    openrouter_app_title: str = "Signal AI Interview"
+
     openai_api_key: SecretStr | None = None
     openai_proxy_url: SecretStr | None = None
-    openrouter_model: str = "openai/gpt-5.6-luna"
-    openrouter_fallback_model: str | None = "deepseek/deepseek-v4-flash-0731"
+    openrouter_model: str = "openai/gpt-4o-mini"
+    openrouter_fallback_model: str | None = None
     openrouter_timeout_seconds: float = Field(default=90.0, gt=0, le=600)
     openrouter_max_retries: int = Field(default=1, ge=0, le=5)
     interview_judge_workers: int = Field(default=6, ge=1, le=20)
@@ -40,6 +71,10 @@ class Settings(BaseSettings):
     whisper_compute_type: str = "int8"
     whisper_timeout_seconds: float = Field(default=300.0, gt=0, le=1800)
     whisper_beam_size: int = Field(default=5, ge=1, le=20)
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
 
 @lru_cache
