@@ -1,27 +1,56 @@
-# AI Interview Backend MVP
+# Signal interview API
 
-Minimal FastAPI backend for question generation, audio transcription, and technical
-answer evaluation.
-Question generation uses GPT-5.6 Luna through OpenRouter with structured output.
-Audio transcription uses a local faster-whisper model.
+FastAPI backend for the local end-to-end hiring interview demo. The active
+workflow persists structured state in PostgreSQL, stores original documents and
+interview media in S3-compatible MinIO, and sends model calls to OpenRouter.
 
-## Local setup
+The earlier stateless endpoints remain available: question generation uses
+GPT-5.6 Luna through OpenRouter with structured output, technical answer
+evaluation uses the same proxy-backed client, and their batch transcription
+endpoint keeps the local faster-whisper adapter.
 
-Requires Python 3.12.
+The application deliberately does not make an autonomous hiring decision. It
+produces job-related evidence and keeps the AI recommendation locked until the
+reviewer has opened every analysis item for at least the configured review time.
 
-```bash
-python -m venv .venv
-.venv/Scripts/activate
-python -m pip install -e ".[dev]"
-copy .env.example .env
-uvicorn interview_api.main:app --reload
-```
+## Run the complete stack
 
-Health check:
+Use the repository-level Compose configuration:
 
 ```bash
-curl http://127.0.0.1:8000/health
+cd ..
+cp .env.example .env
+# Fill PostgreSQL, MinIO and a rotated OpenRouter credential.
+docker compose up --build
 ```
+
+The API is available at `http://localhost:8000`; interactive documentation is at
+`http://localhost:8000/docs`.
+
+## Workflow API
+
+The `/api/v1` workflow covers:
+
+- demo user sessions (`/dev/users`, `/dev/session`, `/session`);
+- positions with vacancy uploads and interview constraints (`/positions`);
+- resume upload and generated question drafts (`/positions/{id}/candidates`);
+- question editing, approval and candidate invite URLs;
+- candidate briefing, consent, TTS, answer media upload, STT and adaptive
+  follow-up questions;
+- interview completion and structured analysis;
+- private media/transcript download links;
+- per-item review heartbeats and the server-enforced decision gate;
+- the candidate-facing recruiter outcome, without the internal reason.
+
+Question generation, follow-up selection and analysis use structured OpenRouter
+chat responses. Transcription uses OpenRouter's speech-to-text endpoint and
+question audio uses its text-to-speech endpoint. Model names are configured with
+`OPENROUTER_CHAT_MODEL`, `OPENROUTER_STT_MODEL` and `OPENROUTER_TTS_MODEL`.
+
+Legacy stateless endpoints for the earlier prototype remain available for
+compatibility. The React product flow does not call them.
+
+## Legacy stateless API
 
 Set both `OPENAI_API_KEY` and `OPENAI_PROXY_URL` to enable OpenRouter-backed
 question generation and answer evaluation. The client requires the proxy and
@@ -82,7 +111,17 @@ curl.exe -X POST http://127.0.0.1:8000/api/v1/transcriptions `
 
 ## Tests
 
+Requires Python 3.12:
+
 ```bash
-pytest
-ruff check .
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[dev]'
+PYTHONDONTWRITEBYTECODE=1 pytest
+ruff check src tests
 ```
+
+The workflow integration test exercises the complete HR → candidate → HR →
+candidate state machine with SQLite and deterministic in-memory test doubles. It
+does not spend OpenRouter credits or require Docker. PostgreSQL and MinIO are used
+by the Compose runtime.

@@ -1,0 +1,50 @@
+# Local secrets. Commit only sanitized examples.
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.pytest-case-*/
+
+# Node / frontend
+node_modules/
+.pnpm-store/
+.next/
+.vinext/
+.wrangler/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Generated local artifacts
+.tmp/
+tmp/
+.chart-data-*/
+
+# Editors and operating systems
+.DS_Store
+._*
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
