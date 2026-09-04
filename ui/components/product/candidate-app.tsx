@@ -60,6 +60,8 @@ type PendingAnswer = {
   durationSeconds: number;
 };
 
+const MAX_ANSWER_SECONDS = 180;
+
 function errorText(error: unknown) {
   if (error instanceof ApiError) return error.message;
   return error instanceof Error
@@ -403,6 +405,12 @@ function Preparation({
               </li>
               <li className="flex gap-2">
                 <Check className="mt-0.5 size-4 text-emerald-600" />
+                Аудио и текстовый контекст обрабатываются моделями через
+                OpenRouter согласно настроенной политике хранения; видео
+                остаётся в локальном хранилище компании.
+              </li>
+              <li className="flex gap-2">
+                <Check className="mt-0.5 size-4 text-emerald-600" />
                 Решение всегда подтверждает человек.
               </li>
             </ul>
@@ -612,6 +620,7 @@ function InterviewRoom({
         0,
     ),
   );
+  const [answerSeconds, setAnswerSeconds] = useState(0);
   const [online, setOnline] = useState(() => navigator.onLine);
   const [error, setError] = useState('');
   const [pending, setPending] = useState<PendingAnswer | null>(null);
@@ -673,6 +682,7 @@ function InterviewRoom({
     try {
       recordingRef.current = startRecorders(stream);
       answerStartedAtRef.current = performance.now();
+      setAnswerSeconds(0);
       setPhase('answering');
       setError('');
     } catch (caught) {
@@ -709,6 +719,8 @@ function InterviewRoom({
   useEffect(() => {
     if (!question) return;
     const controller = new AbortController();
+    let disposed = false;
+    const voiceTimeout = window.setTimeout(() => controller.abort(), 15_000);
     recordingRef.current = null;
     audioRef.current?.pause();
     if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
@@ -717,7 +729,8 @@ function InterviewRoom({
     api
       .getQuestionSpeech(briefing.interviewId, question.id, controller.signal)
       .then((blob) => {
-        if (controller.signal.aborted) return;
+        window.clearTimeout(voiceTimeout);
+        if (disposed) return;
         const url = URL.createObjectURL(blob);
         audioUrlRef.current = url;
         const audio = new Audio(url);
@@ -727,14 +740,17 @@ function InterviewRoom({
         void playModelVoice();
       })
       .catch((caught) => {
-        if (controller.signal.aborted) return;
+        window.clearTimeout(voiceTimeout);
+        if (disposed) return;
         notify(
-          `Серверная озвучка недоступна: ${errorText(caught)}. Используем голос браузера.`,
+          `Серверная озвучка не ответила вовремя: ${errorText(caught)}. Используем голос браузера.`,
         );
         playBrowserFallback();
       });
 
     return () => {
+      disposed = true;
+      window.clearTimeout(voiceTimeout);
       controller.abort();
       audioRef.current?.pause();
       window.speechSynthesis?.cancel();
@@ -800,7 +816,7 @@ function InterviewRoom({
               onComplete();
               return;
             }
-            if (latest.currentQuestion?.id !== answer.question.id) {
+            if (latest.answeredQuestionIds.includes(answer.question.id)) {
               setPending(null);
               setAnswered((count) => count + 1);
               if (latest.currentQuestion) {
@@ -858,6 +874,20 @@ function InterviewRoom({
       setPhase('error');
     }
   }, [phase, question, submitPending]);
+
+  useEffect(() => {
+    if (phase !== 'answering') return;
+    const timer = window.setInterval(() => {
+      setAnswerSeconds((current) => {
+        const next = current + 1;
+        if (next >= MAX_ANSWER_SECONDS) {
+          window.setTimeout(() => void finishAnswer(), 0);
+        }
+        return next;
+      });
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [finishAnswer, phase]);
 
   useEffect(() => {
     if (
@@ -1017,7 +1047,7 @@ function InterviewRoom({
                   : phase === 'asking'
                     ? 'Signal озвучивает вопрос'
                     : phase === 'answering'
-                      ? 'Говорите. Нажмите на круг, когда закончите.'
+                      ? `Говорите. Нажмите на круг, когда закончите. Автосохранение через ${formatTimer(MAX_ANSWER_SECONDS - answerSeconds)}.`
                       : phase === 'uploading'
                         ? hasVideo
                           ? 'Загружаем аудио и видео, распознаём речь…'
@@ -1198,7 +1228,7 @@ export function CandidateApp({
 }: CandidateAppProps) {
   const [view, setView] = useState<CandidateView>(() => {
     if (!initialBriefing) return 'home';
-    return ['completed', 'processing', 'analyzing'].includes(
+    return ['completed', 'processing', 'analyzing', 'error'].includes(
       initialBriefing.status,
     )
       ? 'processing'
@@ -1255,12 +1285,17 @@ export function CandidateApp({
         }
         if (
           activeInterview &&
-          ['completed', 'processing', 'analyzing'].includes(
+          ['completed', 'processing', 'analyzing', 'error'].includes(
             activeInterview.status,
           ) &&
           currentOutcome?.status === 'pending'
         ) {
           setView('processing');
+          if (activeInterview.status === 'error') {
+            setCompletionError(
+              'Подготовка анализа прервалась. Повторите завершение интервью.',
+            );
+          }
         }
         setError('');
       } catch (caught) {

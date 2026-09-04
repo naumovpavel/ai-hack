@@ -15,12 +15,24 @@ from interview_api.workflow.entities import (
     MediaAssetRow,
     PositionRow,
     QuestionRow,
+    ReviewProgressRow,
     UserRow,
     WorkflowBase,
 )
 
 DATABASE_URL = "sqlite+aiosqlite:////private/tmp/signal-interview-demo.sqlite3"
 MEDIA_ROOT = Path("/private/tmp/signal-interview-media")
+
+
+def evidence(transcript: str, quote: str, label: str, rationale: str) -> dict[str, object]:
+    start = transcript.index(quote)
+    return {
+        "quote": quote,
+        "start": start,
+        "end": start + len(quote),
+        "label": label,
+        "rationale": rationale,
+    }
 
 
 async def seed() -> None:
@@ -221,16 +233,15 @@ async def seed() -> None:
                 ),
                 question_id=questions[0].id,
                 evidence=[
-                    {
-                        "quote": (
+                    evidence(
+                        transcripts[0][2],
+                        (
                             "Блокирующий вызов останавливает event loop и задерживает "
                             "остальные корутины."
                         ),
-                        "start": 56,
-                        "end": 133,
-                        "label": "confirmed",
-                        "rationale": "Технически корректное объяснение влияния блокировки.",
-                    }
+                        "confirmed",
+                        "Технически корректное объяснение влияния блокировки.",
+                    )
                 ],
                 required_review=True,
             ),
@@ -246,13 +257,12 @@ async def seed() -> None:
                 ),
                 question_id=questions[1].id,
                 evidence=[
-                    {
-                        "quote": "Сначала запускаю EXPLAIN ANALYZE",
-                        "start": 0,
-                        "end": 33,
-                        "label": "confirmed",
-                        "rationale": "Назван базовый инструмент анализа фактического плана.",
-                    }
+                    evidence(
+                        transcripts[1][2],
+                        "Сначала запускаю EXPLAIN ANALYZE",
+                        "confirmed",
+                        "Назван базовый инструмент анализа фактического плана.",
+                    )
                 ],
                 required_review=True,
             ),
@@ -268,19 +278,26 @@ async def seed() -> None:
                 ),
                 question_id=questions[2].id,
                 evidence=[
-                    {
-                        "quote": "Настройкой Kubernetes в основном занимался DevOps",
-                        "start": 75,
-                        "end": 124,
-                        "label": "check",
-                        "rationale": (
-                            "Нужно отделить наблюдение за rollout от личного владения "
-                            "процессом."
-                        ),
-                    }
+                    evidence(
+                        transcripts[2][2],
+                        "Настройкой Kubernetes в основном занимался DevOps",
+                        "check",
+                        ("Нужно отделить наблюдение за rollout от личного владения процессом."),
+                    )
                 ],
                 required_review=True,
             ),
+        ]
+        review_progress = [
+            ReviewProgressRow(
+                id=f"demo-review-{index + 1}",
+                analysis_item_id=item.id,
+                user_id="hr-demo",
+                accumulated_seconds=10.0,
+                active=False,
+                completed_at=now,
+            )
+            for index, item in enumerate(items)
         ]
 
         transcript_key = "demo/interview-transcript.txt"
@@ -315,6 +332,7 @@ async def seed() -> None:
                 *answers,
                 analysis,
                 *items,
+                *review_progress,
                 media,
             ]
         )

@@ -36,7 +36,6 @@ class Settings(BaseSettings):
     session_cookie_name: str = "signal_session"
     session_ttl_hours: int = Field(default=168, ge=1, le=24 * 90)
     invite_ttl_days: int = Field(default=14, ge=1, le=90)
-    review_seconds_per_item: int = Field(default=10, ge=1, le=120)
 
     # New workflow models all run through OpenRouter. OPENAI_API_KEY remains
     # supported below for the legacy single-answer evaluator.
@@ -51,8 +50,8 @@ class Settings(BaseSettings):
 
     openai_api_key: SecretStr | None = None
     openai_proxy_url: SecretStr | None = None
-    openrouter_model: str = "openai/gpt-4o-mini"
-    openrouter_fallback_model: str | None = None
+    openrouter_model: str = "openai/gpt-5.6-luna"
+    openrouter_fallback_model: str | None = "deepseek/deepseek-v4-flash-0731"
     openrouter_timeout_seconds: float = Field(default=90.0, gt=0, le=600)
     openrouter_max_retries: int = Field(default=1, ge=0, le=5)
     question_generation_model: str = "openai/gpt-5.6-luna"

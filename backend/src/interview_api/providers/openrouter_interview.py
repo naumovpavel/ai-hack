@@ -204,9 +204,7 @@ class OpenRouterClient:
         purpose: str,
         model: str | None = None,
     ) -> StructuredResult:
-        models = tuple(
-            dict.fromkeys(filter(None, (model or self.model, self.fallback_model)))
-        )
+        models = tuple(dict.fromkeys(filter(None, (model or self.model, self.fallback_model))))
         errors: list[Exception] = []
         for model in models:
             try:
@@ -244,7 +242,11 @@ class OpenRouterClient:
                 "type": "json_schema",
                 "json_schema": {"name": schema_name, "strict": True, "schema": schema},
             },
-            "provider": {"require_parameters": True, "data_collection": "deny"},
+            "provider": {
+                "require_parameters": True,
+                "data_collection": "deny",
+                "zdr": True,
+            },
         }
         payload.update({"seed": 0} if model.startswith("openai/gpt-5") else {"temperature": 0})
         body = json.dumps(payload, ensure_ascii=False).encode()
@@ -317,9 +319,7 @@ class OpenRouterClient:
             content = message.get("content")
             value = message.get("parsed") if content is None else content
             if isinstance(value, list):
-                value = "".join(
-                    item.get("text", "") for item in value if isinstance(item, dict)
-                )
+                value = "".join(item.get("text", "") for item in value if isinstance(item, dict))
             value = json.loads(value) if isinstance(value, str) else value
             if not isinstance(value, dict):
                 raise TypeError

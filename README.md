@@ -83,6 +83,10 @@ to verify the product workflow as well.
 Use a short interview and small media samples for this smoke run. Model calls go
 through OpenRouter; PostgreSQL, MinIO, the API, and the UI stay local.
 
+The scripts in `backend/scripts/seed_*.py` are fixtures for
+`interview_api.local_demo` only: they target its temporary SQLite database and
+local file store. They do not seed the Compose PostgreSQL or MinIO services.
+
 ## Current backend checks
 
 Use Python 3.12:

@@ -176,6 +176,7 @@ class InterviewStateResponse(ApiModel):
     deadline_at: datetime | None
     remaining_seconds: int
     current_question: PublicQuestion | None
+    answered_question_ids: list[str] = Field(default_factory=list)
 
 
 class AnswerResponse(ApiModel):
