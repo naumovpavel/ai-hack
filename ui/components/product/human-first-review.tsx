@@ -339,12 +339,16 @@ export function HumanFirstReview({
                 <h3 className="mt-2 text-xl leading-relaxed font-semibold">
                   {question.text}
                 </h3>
-                <div className="mt-5 rounded-xl border bg-muted/20 p-4 sm:p-5">
-                  <p className="mb-3 text-sm font-medium">Ответ кандидата</p>
-                  <p className="whitespace-pre-wrap break-words text-base leading-7">
-                    {question.answerText ||
-                      'Записанного ответа нет. Вы можете выбрать «Не могу оценить».'}
-                  </p>
+                <div className="mt-5">
+                  <AnswerEvidence
+                    key={question.questionId}
+                    answer={question}
+                    items={review.items.filter(
+                      (item) => item.questionId === question.questionId,
+                    )}
+                    media={media}
+                    notify={notify}
+                  />
                 </div>
                 {questionVideo || questionAudio ? (
                   <details

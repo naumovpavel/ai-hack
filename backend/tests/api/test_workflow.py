@@ -420,7 +420,15 @@ def test_full_hr_candidate_workflow_with_review_and_decision_gate(
     analysis = client.get(f"/api/v1/candidates/{candidate_id}/analysis")
     assert analysis.status_code == 200, analysis.text
     analysis_payload = analysis.json()
-    assert analysis_payload["items"] == []
+    assert analysis_payload["items"]
+    assert all(item["questionId"] for item in analysis_payload["items"])
+    assert all(item["body"] for item in analysis_payload["items"])
+    assert all(item["evidence"] for item in analysis_payload["items"])
+    assert analysis_payload["score"] is None
+    assert analysis_payload["summary"] is None
+    assert analysis_payload["strengths"] == []
+    assert analysis_payload["growthAreas"] == []
+    assert analysis_payload["unknowns"] == []
     assert len(analysis_payload["questions"]) == 3
     assert analysis_payload["recommendation"] is None
     assert analysis_payload["recommendationLocked"] is True
@@ -459,6 +467,7 @@ def test_full_hr_candidate_workflow_with_review_and_decision_gate(
         assert rated.status_code == 200, rated.text
         assert rated.json()["recommendationLocked"] is True
         assert rated.json()["recommendation"] is None
+        assert rated.json()["items"] == analysis_payload["items"]
     # No time advancement is needed. Ratings survive reload, but do not unlock AI.
     rated = client.get(f"/api/v1/candidates/{candidate_id}/analysis").json()
     assert rated["reviewComplete"] is True
@@ -469,6 +478,8 @@ def test_full_hr_candidate_workflow_with_review_and_decision_gate(
     unlocked = revealed.json()
     assert unlocked["recommendation"] == "manual_review"
     assert unlocked["recommendationLocked"] is False
+    assert len(unlocked["items"]) > len(analysis_payload["items"])
+    assert any(item["questionId"] is None for item in unlocked["items"])
     assert unlocked["initialDecision"]["candidateFeedback"] == feedback
     for item in unlocked["items"]:
         for evidence in item["evidence"]:

@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
-import { Play, RotateCcw } from 'lucide-react';
+import { Play, RotateCcw, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -143,10 +143,12 @@ export function AnswerEvidence({
   items,
   media,
   notify,
+  answer,
 }: {
   items: AnalysisItem[];
   media: CandidateMedia | null;
   notify: (message: string) => void;
+  answer?: { questionId: string; answerText: string | null };
 }) {
   const [evidenceClip, setEvidenceClip] = useState<EvidenceClip | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -156,14 +158,57 @@ export function AnswerEvidence({
     void videoRef.current.play().catch(() => undefined);
   };
   return (
-    <div className="mt-4 divide-y">
+    <div className={answer ? 'space-y-4' : 'mt-4 divide-y'}>
+      {answer ? (
+        <>
+          <div className="rounded-xl border bg-muted/20 p-4 sm:p-5">
+            <p className="mb-3 text-sm font-medium">Ответ кандидата</p>
+            <div className="break-words text-base leading-7">
+              {answer.answerText ? (
+                <EvidenceAnswer
+                  answerText={answer.answerText}
+                  evidence={items.flatMap((item) => item.evidence)}
+                  video={media?.assets.find(
+                    (asset) =>
+                      asset.kind === 'video' &&
+                      asset.questionId === answer.questionId,
+                  )}
+                  onPlay={setEvidenceClip}
+                />
+              ) : (
+                <p>
+                  Записанного ответа нет. Вы можете выбрать «Не могу оценить».
+                </p>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-2 text-sm font-semibold">
+            <Sparkles className="size-4 text-primary" aria-hidden="true" />
+            Аргументация ИИ по ответу
+          </div>
+          {!items.length ? (
+            <p className="text-sm text-muted-foreground">
+              Для этого ответа нет отдельного комментария ИИ.
+            </p>
+          ) : null}
+        </>
+      ) : null}
       {items.map((item) => (
-        <div key={item.id} className="py-4">
-          <h4 className="font-medium">{item.title}</h4>
+        <div
+          key={item.id}
+          className={
+            answer
+              ? 'rounded-xl border border-primary/15 bg-primary/5 p-4'
+              : 'py-4'
+          }
+        >
+          <h4 className={answer ? 'text-sm font-medium' : 'font-medium'}>
+            {item.title}
+          </h4>
           <p className="mt-2 whitespace-pre-wrap break-words text-base leading-7">
             {item.body}
           </p>
-          {item.answerText ? (
+          {answer ? null : item.answerText ? (
             <div className="mt-3 rounded-xl bg-muted/30 p-4 text-base leading-7">
               <p className="mb-2 text-sm text-muted-foreground">
                 Ответ кандидата · выделения ИИ

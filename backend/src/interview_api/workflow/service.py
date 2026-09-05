@@ -900,17 +900,14 @@ class WorkflowService(HiringWorkflowMixin):
         ratings = review.question_ratings if review else {}
         review_complete = bool(questions) and all(q.id in ratings for q in questions)
         unlocked = bool(review and review.revealed_at) or decision is not None
-        # Original answers are available throughout. Model conclusions are withheld
-        # server-side until the reviewer commits an independent decision + feedback.
-        items = []
-        if unlocked:
-            analysis_items = await self.repository.list_analysis_items(analysis.id)
-            items = [
-                self._analysis_item_response(
-                    item, answer_text=answer_texts.get(item.question_id or "")
-                )
-                for item in analysis_items
-            ]
+        # Question-specific reasoning helps reviewers check each answer. Overall
+        # conclusions stay hidden until their own decision and feedback are saved.
+        analysis_items = await self.repository.list_analysis_items(analysis.id)
+        items = [
+            self._analysis_item_response(item, answer_text=answer_texts.get(item.question_id or ""))
+            for item in analysis_items
+            if unlocked or item.question_id in answer_texts
+        ]
         return AnalysisResponse(
             id=analysis.id,
             candidate_id=analysis.candidate_id,

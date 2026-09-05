@@ -90,8 +90,10 @@ to verify the product workflow as well.
 7. Return to the HR user and wait for analysis. Verify audio, video, transcript,
    evidence, and recommendation.
 8. Rate each interview answer as sufficient, insufficient, or uncertain. Ratings
-   save immediately; there is no viewing timer. Confirm the AI recommendation
-   and conclusions remain hidden even after all answers have a rating.
+   save immediately; there is no viewing timer. Question-specific AI reasoning,
+   highlighted evidence, and linked video clips are visible beside each answer.
+   The overall AI score, recommendation, and summary remain hidden even after
+   all answers have a rating.
 9. Choose your own overall decision and write candidate feedback. Save this
    independent assessment to reveal the AI recommendation. The candidate's
    outcome must remain pending at this point.
