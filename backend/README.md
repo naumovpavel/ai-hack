@@ -60,6 +60,12 @@ never falls back to a direct connection. Question generation uses
 
 ## Technical answer evaluation
 
+Prompt version `interview-technical-errors-v8` adds coverage-only rules selected
+in a separate retrospective Luna eval. Extraction and factual judging are
+unchanged. See [results, provenance and limitations](docs/luna-coverage-v8.md).
+These measurements are not a new evaluation of this backend or its separate
+product-workflow analyzer.
+
 Luna (`openai/gpt-5.6-luna`) is the primary model; DeepSeek V4 Flash is used only
 when the primary model is unavailable. Both model names are configurable through
 `OPENROUTER_MODEL` and `OPENROUTER_FALLBACK_MODEL`.

@@ -5,6 +5,10 @@ import pytest
 
 from interview_api.domain.models import AnnotationLabel, ClaimJudgement
 from interview_api.providers.openrouter_interview import (
+    COMPLETENESS_PROMPT,
+    COMPLETENESS_V8_RULES,
+    EXTRACTION_PROMPT,
+    JUDGEMENT_PROMPT,
     OpenRouterClient,
     OpenRouterInterviewPipelineProvider,
     StructuredResult,
@@ -123,23 +127,87 @@ async def test_pipeline_returns_only_incorrect_and_low_confidence_spans() -> Non
     assert all(answer[span.start : span.end] == span.text for span in result.spans)
     assert [aspect.text for aspect in result.missing_aspects] == ["which isolation levels"]
     assert result.meta.claims_evaluated == 3
+    assert result.meta.prompt_version == "interview-technical-errors-v8"
+
+
+@pytest.mark.asyncio
+async def test_v8_rules_are_sent_only_to_completeness() -> None:
+    class RecordingClient(FakeStructuredClient):
+        def __init__(self) -> None:
+            self.prompts: dict[str, str] = {}
+
+        def complete_json(self, **kwargs: Any) -> StructuredResult:
+            self.prompts[kwargs["purpose"]] = kwargs["messages"][0]["content"]
+            return super().complete_json(**kwargs)
+
+    client = RecordingClient()
+    provider = OpenRouterInterviewPipelineProvider(client)
+    await provider.evaluate(
+        "Explain PostgreSQL concurrency and which isolation levels can produce phantom reads.",
+        "MVCC overwrites rows in place.",
+    )
+
+    assert client.prompts == {
+        "extraction": EXTRACTION_PROMPT,
+        "judgement": JUDGEMENT_PROMPT,
+        "completeness": COMPLETENESS_PROMPT + COMPLETENESS_V8_RULES,
+    }
+
+
+def test_completeness_keeps_verbatim_unicode_quotes_and_filters_uncertainty() -> None:
+    question = "Как настроить сервис, какие есть ограничения и как проверить результат?"
+    quote = "как проверить результат"
+
+    class CoverageClient:
+        def complete_json(self, **kwargs: Any) -> StructuredResult:
+            assert kwargs["purpose"] == "completeness"
+            return StructuredResult(
+                {
+                    "missing_aspects": [
+                        {
+                            "text": quote,
+                            "start": 0,
+                            "end": 1,
+                            "confidence": 0.85,
+                            "rationale": "Проверка не описана.",
+                        },
+                        {
+                            "text": "какие есть ограничения",
+                            "start": 0,
+                            "end": 1,
+                            "confidence": 0.84,
+                            "rationale": "Не уверен.",
+                        },
+                    ]
+                },
+                "openai/gpt-5.6-luna",
+                "test",
+            )
+
+    provider = OpenRouterInterviewPipelineProvider(CoverageClient())
+    missing, _ = provider._judge_completeness(question, "Сервис настроен.")
+    assert [item.text for item in missing] == [quote]
+    assert question[missing[0].start : missing[0].end] == quote
+    assert missing[0].end == len(question) - 1
 
 
 def test_confidence_thresholds_are_inclusive() -> None:
     provider = OpenRouterInterviewPipelineProvider(FakeStructuredClient())  # type: ignore[arg-type]
 
-    assert provider._annotation_label(
-        ClaimJudgement(verdict="correct", confidence=0.69, rationale="uncertain")
-    ) is AnnotationLabel.REVIEW
-    assert provider._annotation_label(
-        ClaimJudgement(verdict="correct", confidence=0.70, rationale="certain")
-    ) is None
-    assert not provider._is_confident_explicit_aspect(
-        {"text": "which indexes", "confidence": 0.84}
+    assert (
+        provider._annotation_label(
+            ClaimJudgement(verdict="correct", confidence=0.69, rationale="uncertain")
+        )
+        is AnnotationLabel.REVIEW
     )
-    assert provider._is_confident_explicit_aspect(
-        {"text": "which indexes", "confidence": 0.85}
+    assert (
+        provider._annotation_label(
+            ClaimJudgement(verdict="correct", confidence=0.70, rationale="certain")
+        )
+        is None
     )
+    assert not provider._is_confident_explicit_aspect({"text": "which indexes", "confidence": 0.84})
+    assert provider._is_confident_explicit_aspect({"text": "which indexes", "confidence": 0.85})
 
 
 def test_repeated_quotes_follow_model_offset_hints() -> None:
@@ -178,9 +246,7 @@ def test_client_retries_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
         "provider": "test-provider",
         "choices": [{"message": {"content": json.dumps({"claims": []})}}],
     }
-    pool = RetryingPool(
-        [FakeHttpResponse(429), FakeHttpResponse(200, json.dumps(raw).encode())]
-    )
+    pool = RetryingPool([FakeHttpResponse(429), FakeHttpResponse(200, json.dumps(raw).encode())])
     client = OpenRouterClient(
         api_key="secret",
         proxy_url="https://proxy.example:443",

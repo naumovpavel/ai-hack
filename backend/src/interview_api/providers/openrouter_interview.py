@@ -29,7 +29,7 @@ from interview_api.domain.models import (
 )
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-PROMPT_VERSION = "interview-technical-errors-v6"
+PROMPT_VERSION = "interview-technical-errors-v8"
 DEFAULT_MODEL = "openai/gpt-5.6-luna"
 DEFAULT_FALLBACK_MODEL = "deepseek/deepseek-v4-flash-0731"
 CLAIM_CONFIDENCE_THRESHOLD = 0.70
@@ -146,6 +146,24 @@ such as 'which libraries', 'name the volumes', or 'how was the Docker image buil
 must be a minimal exact contiguous quote from the question. When uncertain, return no aspect.
 Confidence means certainty that the aspect is entirely absent from the answer.
 """
+
+# Verbatim coverage-only rules selected by the retrospective Luna eval.
+# Extraction, factual judgement, schemas and confidence thresholds stay unchanged.
+COMPLETENESS_V8_RULES = (
+    "\nСначала мысленно раздели вопрос на независимо запрошенные пункты. Для каждого найди "
+    "содержательный фрагмент ответа: допускаются синонимы, приблизительные числа и краткое "
+    "описание действия, даже ошибочное. Недостаточная подробность не равна отсутствию темы. "
+    "Не подменяй запрошенный аспект более узким неявным требованием. "
+    "Общие меры профилактики не обязательно раскрывают отдельный вопрос о действиях при уже "
+    "наступившей проблеме; простое повторение названия темы без действия тоже не раскрывает её. "
+    "Составной вопрос проверяй по частям: покрытие одного перечисленного пункта "
+    "не покрывает остальные. "
+    "Возвращай только полностью отсутствующий пункт. Текст цитаты начинается с вопросительного "
+    "оборота, если он есть в оригинале, и заканчивается последним словом пункта: без конечных "
+    "точки, вопросительного знака, запятой, пробела и союза следующего пункта. "
+    "Не перефразируй и не добавляй слова. Перед включением перечитай весь ответ и убери аспект, "
+    "если найдёшь хотя бы одно прямое содержательное раскрытие. Confidence от 0 до 1."
+)
 
 
 @dataclass(slots=True)
@@ -421,7 +439,7 @@ class OpenRouterInterviewPipelineProvider:
     ) -> tuple[list[MissingAspect], StructuredResult]:
         result = self._client.complete_json(
             messages=[
-                {"role": "system", "content": COMPLETENESS_PROMPT},
+                {"role": "system", "content": COMPLETENESS_PROMPT + COMPLETENESS_V8_RULES},
                 {"role": "user", "content": f"QUESTION:\n{question}\n\nANSWER:\n{answer}"},
             ],
             schema_name="missing_aspects",
