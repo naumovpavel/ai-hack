@@ -212,9 +212,7 @@ class AnswerRow(WorkflowBase):
 
 class MediaAssetRow(WorkflowBase):
     __tablename__ = "workflow_media_assets"
-    __table_args__ = (
-        UniqueConstraint("answer_id", "kind", name="uq_workflow_media_answer_kind"),
-    )
+    __table_args__ = (UniqueConstraint("answer_id", "kind", name="uq_workflow_media_answer_kind"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     candidate_id: Mapped[str] = mapped_column(
@@ -281,6 +279,25 @@ class AnalysisItemRow(WorkflowBase):
     )
     evidence: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     required_review: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class HumanReviewRow(WorkflowBase):
+    __tablename__ = "workflow_human_reviews"
+    __table_args__ = (UniqueConstraint("analysis_id", "user_id", name="uq_workflow_human_review"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    analysis_id: Mapped[str] = mapped_column(
+        ForeignKey("workflow_analyses.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("workflow_users.id", ondelete="RESTRICT"), index=True
+    )
+    question_ratings: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
+    initial_status: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    initial_feedback: Mapped[str] = mapped_column(Text, default="")
+    initial_internal_reason: Mapped[str] = mapped_column(Text, default="")
+    revealed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    change_reason: Mapped[str] = mapped_column(Text, default="")
 
 
 class ReviewProgressRow(WorkflowBase):

@@ -89,12 +89,25 @@ to verify the product workflow as well.
    explicit retry is offered if speech fails.
 7. Return to the HR user and wait for analysis. Verify audio, video, transcript,
    evidence, and recommendation.
-8. Open every required analysis item for at least ten active seconds. Confirm
-   that an earlier decision attempt is rejected, then invite or reject the
-   candidate. For rejection, enter an original internal reason and candidate
-   feedback.
-9. Switch back to the candidate and verify that the human decision and feedback
-   are visible.
+8. Rate each interview answer as sufficient, insufficient, or uncertain. Ratings
+   save immediately; there is no viewing timer. Confirm the AI recommendation
+   and conclusions remain hidden even after all answers have a rating.
+9. Choose your own overall decision and write candidate feedback. Save this
+   independent assessment to reveal the AI recommendation. The candidate's
+   outcome must remain pending at this point.
+10. Compare your decision with the AI. Keep your decision, or adopt the opposite
+    AI recommendation and explain the change in an internal comment. Confirm
+    the final decision and candidate feedback. Reload and check that the original
+    assessment, final decision, and any change reason are preserved.
+11. Switch back to the candidate and verify that only the final human decision
+    and candidate feedback are visible.
+
+The server enforces this sequence. Question ratings and the original assessment
+are stored per analysis and reviewer in the additive `workflow_human_reviews`
+table. The original assessment is frozen when the AI recommendation is revealed;
+repeating the same reveal or final-confirmation request is safe. Existing decisions
+remain readable. The old timing/paste-tracking database fields are retained only
+for compatibility with existing databases and are no longer used to allow decisions.
 
 Use a short interview and small media samples for this smoke run. Model calls go
 through OpenRouter; PostgreSQL, MinIO, the API, and the UI stay local.

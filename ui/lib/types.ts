@@ -242,9 +242,6 @@ export type AnalysisItem = {
   questionId: string | null;
   answerText: string | null;
   evidence: AnalysisEvidence[];
-  requiredReview: boolean;
-  reviewedSeconds: number;
-  reviewComplete: boolean;
 };
 
 export type Analysis = {
@@ -263,6 +260,10 @@ export type Analysis = {
   items: AnalysisItem[];
   reviewComplete: boolean;
   recommendationLocked: boolean;
+  questions: QuestionReview[];
+  initialDecision: InitialDecision | null;
+  finalDecision: Decision | null;
+  changeReason: string;
   createdAt: string;
 };
 
@@ -287,27 +288,25 @@ export type CandidateMedia = {
   assets: MediaAsset[];
 };
 
-export type ReviewEvent = {
-  itemId: string;
-  event: 'open' | 'heartbeat' | 'close';
-  visible: boolean;
-  focused: boolean;
+export type QuestionRating = 'positive' | 'negative' | 'uncertain';
+
+export type QuestionReview = {
+  questionId: string;
+  text: string;
+  topic: string;
+  kind: string;
+  answerText: string | null;
+  rating: QuestionRating | null;
 };
 
-export type ReviewProgress = {
-  itemId: string;
-  reviewedSeconds: number;
-  reviewComplete: boolean;
-  allItemsComplete: boolean;
-};
-
-export type DecisionInput = {
+export type InitialDecisionInput = {
   status: Exclude<HiringDecision, 'pending'>;
-  internalReason: string;
   candidateFeedback: string;
-  internalReasonPasteEvents: number;
-  internalReasonTypedCharacters: number;
+  internalReason?: string;
 };
+
+export type InitialDecision = InitialDecisionInput & { recordedAt: string };
+export type DecisionInput = InitialDecisionInput & { changeReason?: string };
 
 export type Decision = {
   id: string;

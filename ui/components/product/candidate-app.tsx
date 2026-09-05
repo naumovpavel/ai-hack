@@ -337,7 +337,7 @@ function Preparation({
                 [
                   FileCheck2,
                   'Проверка человеком',
-                  'AI связывает выводы с ответами, но не принимает кадровое решение.',
+                  'Команда сначала оценит ответы и запишет своё решение, затем увидит рекомендацию AI.',
                 ],
               ].map(([Icon, title, text]) => {
                 const StepIcon = Icon as typeof Volume2;
@@ -377,8 +377,9 @@ function Preparation({
               </div>
             </div>
             <div className="mt-4 rounded-xl bg-muted p-4 text-sm leading-relaxed text-muted-foreground">
-              Нанимающая команда не увидит итоговую рекомендацию, пока не
-              откроет каждый пункт анализа и не изучит его минимум 10 секунд.
+              Нанимающая команда сначала оценит каждый ответ и сохранит своё
+              решение с фидбэком. Только после этого ей откроется рекомендация
+              ИИ. Окончательное решение подтвердит человек.
             </div>
           </section>
         </div>
@@ -1276,7 +1277,7 @@ function Processing({
         <p className="mx-auto mt-3 max-w-md text-sm leading-relaxed text-muted-foreground">
           {completing
             ? 'AI готовит анализ. Камера и микрофон уже выключены.'
-            : 'Команда проверит каждый пункт анализа и примет решение. Эта страница обновится автоматически.'}
+            : 'Команда оценит ответы и примет решение. Эта страница обновится автоматически.'}
         </p>
         {outcome?.status === 'pending' ? (
           <Badge className="mt-5 bg-blue-50 text-blue-700">

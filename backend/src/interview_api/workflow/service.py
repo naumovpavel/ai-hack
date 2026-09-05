@@ -28,7 +28,6 @@ from interview_api.workflow.entities import (
     InterviewRow,
     PositionRow,
     QuestionRow,
-    ReviewProgressRow,
     UserRow,
 )
 from interview_api.workflow.errors import (
@@ -54,6 +53,8 @@ from interview_api.workflow.schemas import (
     CompleteInterviewResponse,
     DecisionRequest,
     DecisionResponse,
+    InitialDecisionRequest,
+    InitialDecisionResponse,
     InterviewBriefingResponse,
     InterviewStateResponse,
     MediaAssetResponse,
@@ -62,8 +63,8 @@ from interview_api.workflow.schemas import (
     PositionResponse,
     PublicQuestion,
     QuestionResponse,
-    ReviewHeartbeatRequest,
-    ReviewHeartbeatResponse,
+    QuestionReviewRequest,
+    QuestionReviewResponse,
     SessionResponse,
     UserResponse,
 )
@@ -84,8 +85,6 @@ class WorkflowService(HiringWorkflowMixin):
         max_document_characters: int = 100_000,
         max_audio_bytes: int = 25 * 1024 * 1024,
         max_video_bytes: int = 250 * 1024 * 1024,
-        required_review_seconds: float = 10.0,
-        heartbeat_grace_seconds: float = 1.5,
         answer_submission_grace_seconds: int = 60,
         cookie_secure: bool = False,
         cookie_name: str = "signal_session",
@@ -102,8 +101,6 @@ class WorkflowService(HiringWorkflowMixin):
         self.max_document_characters = max_document_characters
         self.max_audio_bytes = max_audio_bytes
         self.max_video_bytes = max_video_bytes
-        self.required_review_seconds = required_review_seconds
-        self.heartbeat_grace_seconds = heartbeat_grace_seconds
         self.answer_submission_grace_seconds = answer_submission_grace_seconds
         self.cookie_secure = cookie_secure
         self.cookie_name = cookie_name
@@ -741,36 +738,50 @@ class WorkflowService(HiringWorkflowMixin):
             )
         return MediaListResponse(candidate_id=candidate_id, assets=assets)
 
+    async def rate_question(
+        self,
+        *,
+        actor: UserRow,
+        candidate_id: str,
+        question_id: str,
+        request: QuestionReviewRequest,
+    ) -> AnalysisResponse:
+        await self._owned_candidate(actor, candidate_id)
+        analysis = await self.repository.get_analysis(candidate_id)
+        question = await self.repository.get_question(question_id)
+        if question.candidate_id != candidate_id:
+            raise WorkflowNotFoundError("Вопрос не относится к этому интервью.")
+        await self.repository.save_human_review(
+            candidate_id=candidate_id,
+            analysis_id=analysis.id,
+            user_id=actor.id,
+            question_id=question_id,
+            rating=request.rating,
+            now=self._now(),
+        )
+        return await self._analysis_response(analysis, actor.id)
+
     async def record_review(
         self,
         *,
         actor: UserRow,
         candidate_id: str,
-        request: ReviewHeartbeatRequest,
-    ) -> ReviewHeartbeatResponse:
+        request: InitialDecisionRequest,
+    ) -> AnalysisResponse:
         await self._owned_candidate(actor, candidate_id)
-        progress = await self.repository.record_review_event(
+        analysis = await self.repository.get_analysis(candidate_id)
+        questions = await self.repository.list_questions(candidate_id)
+        await self.repository.save_human_review(
             candidate_id=candidate_id,
+            analysis_id=analysis.id,
             user_id=actor.id,
-            item_id=request.item_id,
-            event=request.event.value,
-            visible=request.visible,
-            focused=request.focused,
+            initial_status=request.status.value,
+            feedback=request.candidate_feedback.strip(),
+            internal_reason=request.internal_reason.strip(),
+            required_question_ids={question.id for question in questions},
             now=self._now(),
-            required_seconds=self.required_review_seconds,
-            heartbeat_grace_seconds=self.heartbeat_grace_seconds,
         )
-        all_complete = await self.repository.all_required_items_reviewed(
-            candidate_id=candidate_id,
-            user_id=actor.id,
-            required_seconds=self.required_review_seconds,
-        )
-        return ReviewHeartbeatResponse(
-            item_id=request.item_id,
-            reviewed_seconds=round(progress.accumulated_seconds, 2),
-            review_complete=progress.accumulated_seconds >= self.required_review_seconds,
-            all_items_complete=all_complete,
-        )
+        return await self._analysis_response(analysis, actor.id)
 
     async def decide(
         self,
@@ -780,42 +791,28 @@ class WorkflowService(HiringWorkflowMixin):
         request: DecisionRequest,
     ) -> DecisionResponse:
         await self._owned_candidate(actor, candidate_id)
-        await self.repository.get_analysis(candidate_id)
-        if not await self.repository.all_required_items_reviewed(
-            candidate_id=candidate_id,
-            user_id=actor.id,
-            required_seconds=self.required_review_seconds,
-        ):
+        analysis = await self.repository.get_analysis(candidate_id)
+        review = await self.repository.get_human_review(analysis.id, actor.id)
+        if review is None or review.revealed_at is None:
             raise ReviewGateError()
-        internal_reason = request.internal_reason.strip()
-        feedback = request.candidate_feedback.strip()
-        if request.status.value == "rejected":
-            if len(internal_reason) < 12:
-                raise WorkflowValidationError(
-                    "A rejection requires an internal reason of at least 12 characters."
-                )
-            if len(feedback) < 30:
-                raise WorkflowValidationError(
-                    "A rejection requires candidate feedback of at least 30 characters."
-                )
-            if request.internal_reason_paste_events > 0:
-                raise WorkflowValidationError(
-                    "Pasted text is not allowed in the internal rejection reason.",
-                    details={"field": "internalReason"},
-                )
-            if request.internal_reason_typed_characters < len(internal_reason):
-                raise WorkflowValidationError(
-                    "The internal reason must be typed by the reviewer.",
-                    details={"field": "internalReason"},
-                )
+        ai_status = {"fit": "next_stage", "not_fit": "rejected"}.get(analysis.recommendation)
+        if (
+            request.status.value != review.initial_status
+            and request.status.value == ai_status
+            and not request.change_reason.strip()
+        ):
+            raise WorkflowValidationError(
+                "Объясните, почему рекомендация ИИ изменила ваше решение.",
+                details={"field": "changeReason"},
+            )
         row = await self.repository.save_decision(
             candidate_id=candidate_id,
             decided_by=actor.id,
             status=request.status.value,
-            internal_reason=internal_reason,
-            candidate_feedback=feedback,
-            paste_events=request.internal_reason_paste_events,
-            typed_characters=request.internal_reason_typed_characters,
+            internal_reason=request.internal_reason.strip(),
+            candidate_feedback=request.candidate_feedback.strip(),
+            analysis_id=analysis.id,
+            change_reason=request.change_reason.strip(),
         )
         return self._decision_response(row)
 
@@ -895,44 +892,71 @@ class WorkflowService(HiringWorkflowMixin):
         return await self.repository.next_unanswered_question(interview.id)
 
     async def _analysis_response(self, analysis: AnalysisRow, user_id: str) -> AnalysisResponse:
-        pairs = await self.repository.list_analysis_items_with_progress(analysis.id, user_id)
-        question_ids = list({item.question_id for item, _ in pairs if item.question_id})
-        answers = await self.repository.list_answers_by_question_ids(question_ids)
+        review = await self.repository.get_human_review(analysis.id, user_id)
+        decision = await self.repository.get_decision(analysis.candidate_id)
+        questions = await self.repository.list_questions(analysis.candidate_id)
+        answers = await self.repository.list_answers_by_question_ids([q.id for q in questions])
         answer_texts = {answer.question_id: answer.transcript for answer in answers}
-        items = [
-            self._analysis_item_response(
-                item, progress, answer_text=answer_texts.get(item.question_id or "")
-            )
-            for item, progress in pairs
-        ]
-        review_complete = all(not item.required_review or item.review_complete for item in items)
+        ratings = review.question_ratings if review else {}
+        review_complete = bool(questions) and all(q.id in ratings for q in questions)
+        unlocked = bool(review and review.revealed_at) or decision is not None
+        # Original answers are available throughout. Model conclusions are withheld
+        # server-side until the reviewer commits an independent decision + feedback.
+        items = []
+        if unlocked:
+            analysis_items = await self.repository.list_analysis_items(analysis.id)
+            items = [
+                self._analysis_item_response(
+                    item, answer_text=answer_texts.get(item.question_id or "")
+                )
+                for item in analysis_items
+            ]
         return AnalysisResponse(
             id=analysis.id,
             candidate_id=analysis.candidate_id,
             version=analysis.version,
-            score=analysis.score if review_complete else None,
-            confidence=analysis.confidence if review_complete else None,
-            recommendation=analysis.recommendation if review_complete else None,  # type: ignore[arg-type]
-            summary=analysis.summary if review_complete else None,
-            strengths=list(analysis.strengths) if review_complete else [],
-            growth_areas=list(analysis.growth_areas) if review_complete else [],
-            unknowns=list(analysis.unknowns) if review_complete else [],
-            skills=list(analysis.skills) if review_complete else [],
-            next_questions=list(analysis.next_questions) if review_complete else [],
+            score=analysis.score if unlocked else None,
+            confidence=analysis.confidence if unlocked else None,
+            recommendation=analysis.recommendation if unlocked else None,
+            summary=analysis.summary if unlocked else None,
+            strengths=list(analysis.strengths) if unlocked else [],
+            growth_areas=list(analysis.growth_areas) if unlocked else [],
+            unknowns=list(analysis.unknowns) if unlocked else [],
+            skills=list(analysis.skills) if unlocked else [],
+            next_questions=list(analysis.next_questions) if unlocked else [],
             items=items,
             review_complete=review_complete,
-            recommendation_locked=not review_complete,
+            recommendation_locked=not unlocked,
+            questions=[
+                QuestionReviewResponse(
+                    question_id=q.id,
+                    text=q.text,
+                    topic=q.topic,
+                    kind=q.kind,
+                    answer_text=answer_texts.get(q.id),
+                    rating=ratings.get(q.id),
+                )
+                for q in questions
+            ],
+            initial_decision=InitialDecisionResponse(
+                status=review.initial_status,
+                candidate_feedback=review.initial_feedback,
+                internal_reason=review.initial_internal_reason,
+                recorded_at=review.revealed_at,
+            )
+            if review and review.revealed_at
+            else None,
+            final_decision=self._decision_response(decision) if decision else None,
+            change_reason=review.change_reason if review else "",
             created_at=analysis.created_at,
         )
 
     def _analysis_item_response(
         self,
         item: AnalysisItemRow,
-        progress: ReviewProgressRow | None,
         *,
         answer_text: str | None,
     ) -> AnalysisItemResponse:
-        seconds = progress.accumulated_seconds if progress is not None else 0.0
         return AnalysisItemResponse(
             id=item.id,
             order_index=item.order_index,
@@ -942,9 +966,6 @@ class WorkflowService(HiringWorkflowMixin):
             question_id=item.question_id,
             answer_text=answer_text,
             evidence=self._analysis_evidence_responses(item.evidence, answer_text),
-            required_review=item.required_review,
-            reviewed_seconds=round(seconds, 2),
-            review_complete=seconds >= self.required_review_seconds,
         )
 
     async def _extract_document(
