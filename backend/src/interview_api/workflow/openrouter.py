@@ -3,7 +3,11 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
+import math
 import time
+from email.utils import parsedate_to_datetime
+from threading import BoundedSemaphore
 from typing import Any
 from urllib.parse import urljoin
 
@@ -20,6 +24,8 @@ from interview_api.workflow.ai import (
 )
 from interview_api.workflow.errors import WorkflowProviderError
 from interview_api.workflow.speech import playable_speech, speech_request
+
+logger = logging.getLogger(__name__)
 
 QUESTION_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -133,7 +139,7 @@ class OpenRouterWorkflowAI:
         http_referer: str = "http://localhost/ai-interview",
         app_title: str = "AI Interview Workflow",
         timeout_seconds: float = 120,
-        max_retries: int = 1,
+        max_retries: int = 3,
         pool: urllib3.PoolManager | None = None,
     ) -> None:
         if not api_key.strip():
@@ -148,6 +154,9 @@ class OpenRouterWorkflowAI:
         self._app_title = app_title
         self._timeout_seconds = timeout_seconds
         self._max_retries = max_retries
+        # Company documents fan out into sections and template batches. Bound all
+        # chat calls through this shared gateway, including PDF normalization.
+        self._chat_requests = BoundedSemaphore(1)
         self._pool = pool or urllib3.PoolManager(
             cert_reqs="CERT_REQUIRED",
             ca_certs=certifi.where(),
@@ -488,25 +497,89 @@ class OpenRouterWorkflowAI:
         body: bytes,
         headers: dict[str, str],
     ) -> urllib3.BaseHTTPResponse:
+        if path == "chat/completions":
+            payload = json.loads(body)
+            if payload.get("model") == "openai/gpt-5.6-luna":
+                # Prefer available Luna routes over the default Azure endpoint,
+                # which currently returns upstream 429s even for serial calls.
+                # Keep automatic fallback and all privacy/schema requirements.
+                payload.setdefault("provider", {}).setdefault("order", ["openai", "azure/eu"])
+                body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            with self._chat_requests:
+                return self._request_with_retries(path, body, headers)
+        return self._request_with_retries(path, body, headers)
+
+    def _request_with_retries(
+        self,
+        path: str,
+        body: bytes,
+        headers: dict[str, str],
+    ) -> urllib3.BaseHTTPResponse:
         url = urljoin(self._base_url, path)
         retryable = {408, 409, 429, 500, 502, 503, 504}
-        response: urllib3.BaseHTTPResponse | None = None
         for attempt in range(self._max_retries + 1):
+            delay = float(2**attempt)
             try:
                 response = self._pool.request("POST", url, body=body, headers=headers)
             except urllib3.exceptions.HTTPError as exc:
                 if attempt >= self._max_retries:
                     raise WorkflowProviderError("OpenRouter request failed.") from exc
             else:
-                if 200 <= response.status < 300:
+                status = self._response_status(response)
+                if 200 <= status < 300:
                     return response
-                if response.status not in retryable or attempt >= self._max_retries:
+                if status not in retryable or attempt >= self._max_retries:
                     raise WorkflowProviderError(
-                        "OpenRouter rejected the request.",
-                        details={"status": response.status, "endpoint": path},
+                        "Провайдер модели временно ограничил запросы. "
+                        "Попробуйте ещё раз немного позже."
+                        if status == 429
+                        else "OpenRouter rejected the request.",
+                        details={"status": status, "endpoint": path},
                     )
-            time.sleep(2**attempt)
+                if status == 429:
+                    delay *= 5
+                delay = self._retry_delay(response, delay)
+                # Never log upstream messages, document content, or credentials.
+                logger.warning(
+                    "Retrying OpenRouter %s after status %s in %.1fs (retry %s/%s).",
+                    path, status, delay, attempt + 1, self._max_retries,
+                )
+            time.sleep(delay)
         raise WorkflowProviderError("OpenRouter request failed.")
+
+    @staticmethod
+    def _response_status(response: urllib3.BaseHTTPResponse) -> int:
+        if not 200 <= response.status < 300 or not response.data.lstrip().startswith(b"{"):
+            return response.status
+        # OpenRouter commits HTTP 200 before generation. A later provider error
+        # (notably 429) is reported in the JSON body instead of the HTTP status.
+        try:
+            payload = json.loads(response.data)
+        except (ValueError, UnicodeError):
+            return response.status
+        error = payload.get("error")
+        if error is None:
+            return response.status
+        code = error.get("code") if isinstance(error, dict) else None
+        if isinstance(code, str) and code.isdecimal():
+            code = int(code)
+        return code if isinstance(code, int) and 400 <= code <= 599 else 502
+
+    @staticmethod
+    def _retry_delay(response: urllib3.BaseHTTPResponse, fallback: float) -> float:
+        value = (getattr(response, "headers", None) or {}).get("Retry-After")
+        if value is None:
+            return fallback
+        try:
+            delay = float(value)
+        except (TypeError, ValueError):
+            try:
+                delay = parsedate_to_datetime(value).timestamp() - time.time()
+            except (TypeError, ValueError, OverflowError):
+                return fallback
+        if not math.isfinite(delay):
+            return fallback
+        return max(fallback, min(delay, 60.0))
 
     def _auth_headers(self) -> dict[str, str]:
         return {
