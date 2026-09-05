@@ -45,6 +45,8 @@ class AuthSessionRow(WorkflowBase):
     __tablename__ = "workflow_auth_sessions"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    active_role: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    candidate_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     user_id: Mapped[str] = mapped_column(
         ForeignKey("workflow_users.id", ondelete="CASCADE"), index=True
@@ -86,6 +88,9 @@ class PositionRow(WorkflowBase):
 
 class CandidateRow(WorkflowBase):
     __tablename__ = "workflow_candidates"
+
+    user_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    telegram_username: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     position_id: Mapped[str] = mapped_column(

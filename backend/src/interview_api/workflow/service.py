@@ -68,9 +68,11 @@ from interview_api.workflow.schemas import (
     UserResponse,
 )
 from interview_api.workflow.storage import ObjectStorage
+from interview_api.workflow.telegram_auth import TelegramAuthMixin
+from interview_api.workflow.telegram_contacts import extract_telegram_username
 
 
-class WorkflowService(HiringWorkflowMixin):
+class WorkflowService(TelegramAuthMixin, HiringWorkflowMixin):
     def __init__(
         self,
         *,
@@ -109,6 +111,11 @@ class WorkflowService(HiringWorkflowMixin):
         self.cookie_name = cookie_name
         self.session_ttl = timedelta(hours=session_ttl_hours)
         self.invite_ttl = timedelta(days=invite_ttl_days)
+        self.telegram_client = None
+        self.telegram_bot_username = ""
+        self.telegram_webhook_secret = None
+        self.telegram_notifier = None
+        self.allow_demo_auth = False
 
     async def initialize(self) -> None:
         await self.storage.ensure_bucket()
@@ -138,7 +145,9 @@ class WorkflowService(HiringWorkflowMixin):
         if not raw_token:
             raise WorkflowUnauthorizedError()
         user = await self.repository.resolve_auth_session(self._hash_token(raw_token), self._now())
-        if user is None:
+        if user is None or (
+            not self.allow_demo_auth and not getattr(user, "telegram_connected", False)
+        ):
             raise WorkflowUnauthorizedError()
         if role is not None and user.role != role:
             raise WorkflowForbiddenError(details={"requiredRole": role})
@@ -281,6 +290,7 @@ class WorkflowService(HiringWorkflowMixin):
             resume_filename=self._safe_filename(resume_filename),
             resume_content_type=resume_content_type,
             resume_text=resume_text,
+            telegram_username=extract_telegram_username(resume_text),
         )
         questions = await self.repository.replace_questions(candidate.id, proposals)
         return self._candidate_detail(candidate, questions)
@@ -350,6 +360,12 @@ class WorkflowService(HiringWorkflowMixin):
             token_hash=self._hash_token(raw_invite),
             expires_at=expires_at,
         )
+        await self._notify_candidate_status(
+            candidate.id, event_key=f"invite:{_invite.id}:{self._hash_token(raw_invite)}",
+            message="Кандидат приглашён на интервью.",
+            candidate_message="Вас пригласили на интервью.",
+            invite_url=self._invite_url(raw_invite),
+        )
         return ApprovalResponse(
             candidate_id=candidate.id,
             interview_id=interview.id,
@@ -359,16 +375,14 @@ class WorkflowService(HiringWorkflowMixin):
         )
 
     async def resolve_invite(
-        self, raw_invite: str
+        self, raw_invite: str, *, actor: UserRow, raw_session_token: str | None = None
     ) -> tuple[str, SessionResponse, InterviewBriefingResponse]:
-        _invite, candidate = await self.repository.resolve_invite(
-            self._hash_token(raw_invite), self._now()
+        candidate = await self.claim_telegram_invite(actor, raw_invite)
+        raw_session, session = await self.session_for_telegram_actor(
+            actor, "candidate", candidate_id=candidate.id, previous_token=raw_session_token
         )
-        user = await self.repository.get_candidate_user(candidate.id)
-        raw_session, session = await self.create_demo_session(user.id)
         interview = await self.repository.get_interview_for_candidate(candidate.id)
-        briefing = await self._briefing(candidate, interview)
-        return raw_session, session, briefing
+        return raw_session, session, await self._briefing(candidate, interview)
 
     async def get_interview_briefing(
         self, *, actor: UserRow, interview_id: str
@@ -393,6 +407,10 @@ class WorkflowService(HiringWorkflowMixin):
             interview.id,
             started_at=now,
             deadline_at=now + timedelta(minutes=position.duration_minutes),
+        )
+        await self._notify_candidate_status(
+            candidate.id, event_key=f"interview:{interview.id}:started",
+            message="Кандидат начал интервью.",
         )
         return await self._interview_state(interview)
 
@@ -651,6 +669,11 @@ class WorkflowService(HiringWorkflowMixin):
         candidate = await self.repository.get_candidate(interview.candidate_id)
         position = await self._candidate_position(candidate)
         await self.repository.set_interview_status(interview.id, "analyzing")
+        await self._notify_candidate_status(
+            candidate.id, event_key=f"interview:{interview.id}:analyzing",
+            message="Кандидат завершил запись интервью. Готовится анализ.",
+            candidate_message="Интервью записано. Сообщим, когда рекрутер примет решение.",
+        )
         analysis_input = [
             {
                 "questionId": question.id,
@@ -701,7 +724,15 @@ class WorkflowService(HiringWorkflowMixin):
             raise
         except Exception:
             await self.repository.set_interview_status(interview.id, "error")
+            await self._notify_candidate_status(
+                candidate.id, event_key=f"interview:{interview.id}:error",
+                message="Не удалось подготовить анализ интервью. Нужна повторная попытка.",
+            )
             raise
+        await self._notify_candidate_status(
+            candidate.id, event_key=f"interview:{interview.id}:completed",
+            message="Анализ интервью готов к просмотру.",
+        )
         return CompleteInterviewResponse(
             interview_id=interview.id,
             status=interview.status,
@@ -817,7 +848,19 @@ class WorkflowService(HiringWorkflowMixin):
             paste_events=request.internal_reason_paste_events,
             typed_characters=request.internal_reason_typed_characters,
         )
+        status = "Приглашение на следующий этап" if row.status == "next_stage" else "Отказ"
+        await self._notify_candidate_status(
+            candidate_id, event_key=f"decision:{row.id}",
+            message=f"Статус кандидата обновлён: {status.lower()}.",
+            candidate_message=f"{status}." + (
+                f"\n{row.candidate_feedback}" if row.candidate_feedback else ""
+            ),
+        )
         return self._decision_response(row)
+
+    async def _notify_candidate_status(self, candidate_id: str, **kwargs) -> None:
+        if self.telegram_notifier is not None:
+            await self.telegram_notifier.candidate_status(candidate_id, **kwargs)
 
     async def candidate_outcome(self, *, actor: UserRow) -> CandidateOutcomeResponse:
         if actor.role != "candidate" or not actor.candidate_id:
@@ -1394,6 +1437,9 @@ class WorkflowService(HiringWorkflowMixin):
             name=row.name,
             email=row.email,
             candidate_id=row.candidate_id,
+            telegram_username=getattr(row, "telegram_username", None),
+            telegram_connected=getattr(row, "telegram_connected", False),
+            roles=["hr", "candidate"] if getattr(row, "telegram_connected", False) else [row.role],
         )
 
     @staticmethod
@@ -1426,6 +1472,7 @@ class WorkflowService(HiringWorkflowMixin):
     @staticmethod
     def _candidate_summary(row: CandidateRow) -> CandidateSummary:
         return CandidateSummary(
+            telegram_username=row.telegram_username,
             id=row.id,
             position_id=row.position_id,
             name=row.name,

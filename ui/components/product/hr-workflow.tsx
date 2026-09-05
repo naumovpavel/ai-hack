@@ -2100,6 +2100,24 @@ function AddCandidateDialog({
                   }
                 />
               </label>
+              <label
+                className="field-label"
+                htmlFor="prepared-candidate-telegram"
+              >
+                Telegram
+                <Input
+                  id="prepared-candidate-telegram"
+                  className="mt-2"
+                  placeholder="@username"
+                  value={draft.telegramUsername || ''}
+                  onChange={(event) =>
+                    setDraft({ ...draft, telegramUsername: event.target.value })
+                  }
+                />
+                <span className="mt-2 block text-sm font-normal text-muted-foreground">
+                  Уведомим кандидата, если он уже запускал нашего бота.
+                </span>
+              </label>
               <label className="field-label" htmlFor="prepared-candidate-role">
                 Текущая роль
                 <Input

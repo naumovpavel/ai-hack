@@ -106,7 +106,10 @@ workflow = WorkflowService(
     repository=repository,
     storage=storage,
     ai=ai,
-    invite_base_url="http://localhost:3000/?invite=",
+    invite_base_url=settings.workflow_invite_base_url,
+    cookie_name=settings.session_cookie_name,
+    cookie_secure=settings.workflow_cookie_secure,
+    session_ttl_hours=settings.session_ttl_hours,
 )
 app = create_app(
     settings=settings,

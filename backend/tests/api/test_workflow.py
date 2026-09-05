@@ -127,13 +127,38 @@ def workflow_client() -> Iterator[tuple[TestClient, WorkflowService, MutableCloc
     )
 
     app = create_app(
-        settings=Settings(app_env="test", _env_file=None),
+        settings=Settings(app_env="test", demo_auth_enabled=True, _env_file=None),
         workflow_service=service,
         workflow_engine=engine,
     )
     with TestClient(app) as client:
         yield client, service, clock
     asyncio.run(engine.dispose())
+
+
+def _sign_in_telegram(
+    client: TestClient, service: WorkflowService, *, telegram_id: int = 1001
+) -> str:
+    """Create a verified Telegram identity offline; bot protocol has separate tests."""
+
+    async def sign_in() -> str:
+        account = await service.repository.register_telegram_account(
+            telegram_id=telegram_id,
+            chat_id=telegram_id,
+            username=f"candidate_{telegram_id}",
+            first_name="Иван",
+            last_name="Петров",
+            now=service._now(),
+        )
+        actor = await service.repository.get_user(account.user_id)
+        raw_token, _session = await service.session_for_telegram_actor(actor, role="candidate")
+        return raw_token
+
+    raw_token = asyncio.run(sign_in())
+    client.cookies.clear()
+    client.cookies.set(service.cookie_name, raw_token)
+    assert client.get("/api/v1/session").status_code == 200
+    return raw_token
 
 
 def _create_hr_position_and_candidate(
@@ -251,15 +276,75 @@ def test_demo_session_endpoints_are_disabled_in_production(
         settings.app_env = previous_environment
 
 
-def test_briefing_reports_when_follow_ups_are_disabled(
+def test_invitation_requires_telegram_authentication_before_resolving(
     workflow_client: tuple[TestClient, WorkflowService, MutableClock],
 ) -> None:
     client, _service, _clock = workflow_client
+    _position_id, candidate_id, _questions = _create_hr_position_and_candidate(client)
+    approval = client.post(f"/api/v1/candidates/{candidate_id}/questions/approve").json()
+
+    # Possessing an invitation must not turn a non-Telegram demo session into a candidate.
+    non_telegram = client.post(
+        "/api/v1/invites/resolve", json={"token": approval["inviteToken"]}
+    )
+    assert non_telegram.status_code == 403
+    assert "set-cookie" not in non_telegram.headers
+    assert client.get("/api/v1/session").json()["role"] == "hr"
+
+    client.cookies.clear()
+    for token in (approval["inviteToken"], "invalid-invitation-token"):
+        anonymous = client.post("/api/v1/invites/resolve", json={"token": token})
+        assert anonymous.status_code == 401
+        assert "set-cookie" not in anonymous.headers
+    assert client.get("/api/v1/candidate/interview").status_code == 401
+    assert client.get(f"/api/v1/interviews/{approval['interviewId']}").status_code == 401
+
+
+def test_invitation_cannot_rebind_candidate_to_another_telegram_account(
+    workflow_client: tuple[TestClient, WorkflowService, MutableClock],
+) -> None:
+    client, service, _clock = workflow_client
+    _position_id, candidate_id, _questions = _create_hr_position_and_candidate(client)
+    approval = client.post(f"/api/v1/candidates/{candidate_id}/questions/approve").json()
+
+    _sign_in_telegram(client, service, telegram_id=1001)
+    accepted = client.post("/api/v1/invites/resolve", json={"token": approval["inviteToken"]})
+    assert accepted.status_code == 200, accepted.text
+    assert client.get("/api/v1/session").json()["candidateId"] == candidate_id
+
+    _sign_in_telegram(client, service, telegram_id=1002)
+    rejected = client.post("/api/v1/invites/resolve", json={"token": approval["inviteToken"]})
+    assert rejected.status_code == 403
+    assert "set-cookie" not in rejected.headers
+    assert client.get("/api/v1/session").json()["candidateId"] is None
+    assert client.get(f"/api/v1/interviews/{approval['interviewId']}").status_code == 403
+
+
+def test_expired_invitation_is_rejected_after_telegram_authentication(
+    workflow_client: tuple[TestClient, WorkflowService, MutableClock],
+) -> None:
+    client, service, clock = workflow_client
+    _position_id, candidate_id, _questions = _create_hr_position_and_candidate(client)
+    approval = client.post(f"/api/v1/candidates/{candidate_id}/questions/approve").json()
+    clock.advance(service.invite_ttl.total_seconds() + 1)
+    _sign_in_telegram(client, service)
+
+    expired = client.post("/api/v1/invites/resolve", json={"token": approval["inviteToken"]})
+    assert expired.status_code == 404
+    assert "set-cookie" not in expired.headers
+    assert client.get("/api/v1/session").json()["candidateId"] is None
+
+
+def test_briefing_reports_when_follow_ups_are_disabled(
+    workflow_client: tuple[TestClient, WorkflowService, MutableClock],
+) -> None:
+    client, service, _clock = workflow_client
     _position_id, candidate_id, _questions = _create_hr_position_and_candidate(
         client, max_follow_up_questions=0
     )
     approval = client.post(f"/api/v1/candidates/{candidate_id}/questions/approve").json()
 
+    _sign_in_telegram(client, service)
     briefing = client.post("/api/v1/invites/resolve", json={"token": approval["inviteToken"]})
 
     assert briefing.status_code == 200
@@ -269,9 +354,10 @@ def test_briefing_reports_when_follow_ups_are_disabled(
 def test_answer_finishing_at_deadline_is_saved_and_ends_interview(
     workflow_client: tuple[TestClient, WorkflowService, MutableClock],
 ) -> None:
-    client, _service, clock = workflow_client
+    client, service, clock = workflow_client
     _position_id, candidate_id, _questions = _create_hr_position_and_candidate(client)
     approval = client.post(f"/api/v1/candidates/{candidate_id}/questions/approve").json()
+    _sign_in_telegram(client, service)
     assert (
         client.post("/api/v1/invites/resolve", json={"token": approval["inviteToken"]}).status_code
         == 200
@@ -336,6 +422,7 @@ def test_full_hr_candidate_workflow_with_review_and_decision_gate(
     invite_token = approval_payload["inviteToken"]
     assert client.get(f"/api/v1/candidates/{candidate_id}").json()["processingStatus"] == "invited"
 
+    _sign_in_telegram(client, service)
     briefing = client.post("/api/v1/invites/resolve", json={"token": invite_token})
     assert briefing.status_code == 200, briefing.text
     assert briefing.json()["questionCount"] == 2
@@ -355,6 +442,7 @@ def test_full_hr_candidate_workflow_with_review_and_decision_gate(
         client.get(f"/api/v1/candidates/{candidate_id}").json()["processingStatus"]
         == "in_progress"
     )
+    _sign_in_telegram(client, service)
     assert client.post("/api/v1/invites/resolve", json={"token": invite_token}).status_code == 200
 
     speech = client.get(f"/api/v1/interviews/{interview_id}/questions/{current['id']}/speech")
@@ -509,6 +597,7 @@ def test_full_hr_candidate_workflow_with_review_and_decision_gate(
     assert decision.status_code == 200, decision.text
     assert client.get(f"/api/v1/candidates/{candidate_id}").json()["processingStatus"] == "ready"
 
+    _sign_in_telegram(client, service)
     assert client.post("/api/v1/invites/resolve", json={"token": invite_token}).status_code == 200
     outcome = client.get("/api/v1/candidate/outcome")
     assert outcome.status_code == 200
@@ -617,3 +706,11 @@ def test_word_alignment_handles_unicode_punctuation_and_builds_clip() -> None:
     ]
     assert WorkflowService._clip_for_range(alignment, 8, 20) == (0.4, 2.0)
     assert WorkflowService._clip_for_range(None, 8, 20) == (None, None)
+
+
+def test_preexisting_demo_cookie_is_rejected_when_demo_auth_disabled(workflow_client):
+    client, service, _clock = workflow_client
+    assert client.post("/api/v1/dev/session", json={"userId": "hr-demo"}).status_code == 200
+    service.allow_demo_auth = False
+    assert client.get("/api/v1/session").status_code == 401
+    assert client.get("/api/v1/positions").status_code == 401

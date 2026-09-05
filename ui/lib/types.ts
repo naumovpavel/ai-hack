@@ -6,6 +6,15 @@ export type User = {
   name: string;
   email: string | null;
   candidateId: string | null;
+  telegramUsername?: string | null;
+  telegramConnected: boolean;
+  roles?: UserRole[];
+};
+
+export type TelegramLogin = { botUrl: string; expiresAt: string };
+export type TelegramLoginStatus = {
+  status: 'pending' | 'expired' | 'authenticated';
+  user?: User | null;
 };
 
 export type Session = {
@@ -28,6 +37,7 @@ export type ProcessingStatus =
 export type HiringDecision = 'pending' | 'next_stage' | 'rejected';
 
 export type CandidateSummary = {
+  telegramUsername?: string | null;
   id: string;
   positionId: string;
   name: string;
@@ -106,6 +116,7 @@ export type InterviewPlanDetail = InterviewPlan & {
   candidates: CandidateSummary[];
 };
 export type CandidateDraft = {
+  telegramUsername?: string | null;
   draftId: string;
   name: string;
   email: string;

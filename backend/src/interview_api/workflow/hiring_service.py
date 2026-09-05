@@ -32,6 +32,10 @@ from interview_api.workflow.hiring_schemas import (
 )
 from interview_api.workflow.hiring_templates import generic_templates, template_id
 from interview_api.workflow.schemas import ApprovalResponse
+from interview_api.workflow.telegram_contacts import (
+    extract_telegram_username,
+    normalize_telegram_username,
+)
 
 
 class HiringWorkflowMixin:
@@ -467,7 +471,10 @@ class HiringWorkflowMixin:
             },
         )
         await self.repository.save_hiring_resources([draft])
-        return CandidateDraftResponse(draft_id=draft.id, **profile, questions=questions)
+        return CandidateDraftResponse(
+            draft_id=draft.id, **profile, questions=questions,
+            telegram_username=extract_telegram_username(text),
+        )
 
     async def create_plan_candidate(
         self, *, actor: UserRow, plan_id: str, payload: CandidateCreateRequest
@@ -503,6 +510,10 @@ class HiringWorkflowMixin:
             )
             for q in payload.questions
         ]
+        telegram_username = normalize_telegram_username(payload.telegram_username)
+        if (payload.telegram_username and payload.telegram_username.strip()
+                and not telegram_username):
+            raise WorkflowValidationError("Укажите Telegram в формате @username.")
         candidate = await self.repository.save_prepared_candidate(
             draft_id=draft.id,
             owner=actor.id,
@@ -516,6 +527,7 @@ class HiringWorkflowMixin:
                 "resume_filename": draft.payload["filename"],
                 "resume_content_type": draft.payload["contentType"],
                 "resume_text": draft.payload["sourceText"],
+                "telegram_username": telegram_username,
             },
             proposals=proposals,
         )

@@ -1,4 +1,7 @@
 import type {
+  UserRole,
+  TelegramLogin,
+  TelegramLoginStatus,
   AddCandidateInput,
   Analysis,
   AnswerResult,
@@ -259,6 +262,24 @@ async function requestBlob(path: string, signal?: AbortSignal): Promise<Blob> {
 }
 
 export const api = {
+  startTelegramLogin(
+    role: UserRole,
+    inviteToken: string | null,
+  ): Promise<TelegramLogin> {
+    return required(
+      '/auth/telegram/start',
+      jsonRequest({ role, inviteToken }, { method: 'POST' }),
+    );
+  },
+  telegramLoginStatus(signal?: AbortSignal): Promise<TelegramLoginStatus> {
+    return required('/auth/telegram/status', { signal });
+  },
+  switchRole(role: UserRole): Promise<Session> {
+    return required('/auth/role', jsonRequest({ role }, { method: 'POST' }));
+  },
+  async logout(): Promise<void> {
+    await request('/auth/session', { method: 'DELETE' });
+  },
   async listCompanyContext(signal?: AbortSignal): Promise<ContextDocument[]> {
     return unwrapItems(
       await required<ContextDocument[] | { items: ContextDocument[] }>(
@@ -444,6 +465,7 @@ export const api = {
           draftId: draft.draftId,
           name: draft.name,
           email: draft.email,
+          telegramUsername: draft.telegramUsername || null,
           role: draft.role,
           questions: draft.questions.map(questionPayload),
         },
