@@ -439,8 +439,7 @@ def test_full_hr_candidate_workflow_with_review_and_decision_gate(
 
     assert client.post("/api/v1/dev/session", json={"userId": "hr-demo"}).status_code == 200
     assert (
-        client.get(f"/api/v1/candidates/{candidate_id}").json()["processingStatus"]
-        == "in_progress"
+        client.get(f"/api/v1/candidates/{candidate_id}").json()["processingStatus"] == "in_progress"
     )
     _sign_in_telegram(client, service)
     assert client.post("/api/v1/invites/resolve", json={"token": invite_token}).status_code == 200
@@ -467,9 +466,7 @@ def test_full_hr_candidate_workflow_with_review_and_decision_gate(
         )
         if len(submitted_questions) == 1:
             assert answer.status_code == 502
-            interrupted_state = client.get(
-                f"/api/v1/interviews/{interview_id}/state"
-            ).json()
+            interrupted_state = client.get(f"/api/v1/interviews/{interview_id}/state").json()
             assert interrupted_state["answeredQuestionIds"] == []
             assert interrupted_state["currentQuestion"]["id"] == current["id"]
             answer = client.post(
@@ -512,16 +509,20 @@ def test_full_hr_candidate_workflow_with_review_and_decision_gate(
     assert analysis.status_code == 200, analysis.text
     analysis_payload = analysis.json()
     assert analysis_payload["items"]
+    assert all(item["questionId"] for item in analysis_payload["items"])
+    assert all(item["body"] for item in analysis_payload["items"])
+    assert all(item["evidence"] for item in analysis_payload["items"])
+    assert analysis_payload["score"] is None
+    assert analysis_payload["summary"] is None
+    assert analysis_payload["strengths"] == []
+    assert analysis_payload["growthAreas"] == []
+    assert analysis_payload["unknowns"] == []
+    assert len(analysis_payload["questions"]) == 3
     assert analysis_payload["recommendation"] is None
     assert analysis_payload["recommendationLocked"] is True
-    for item in analysis_payload["items"]:
-        if item["questionId"]:
-            assert item["answerText"].startswith("Подтверждённый ответ")
-        for evidence in item["evidence"]:
-            assert evidence["quote"].startswith("Подтверждённый ответ")
-            assert evidence["start"] >= 0
-            assert evidence["clipStartSeconds"] is not None
-            assert evidence["clipEndSeconds"] > evidence["clipStartSeconds"]
+    assert all(
+        q["answerText"].startswith("Подтверждённый ответ") for q in analysis_payload["questions"]
+    )
 
     media = client.get(f"/api/v1/candidates/{candidate_id}/media")
     assert media.status_code == 200
@@ -536,65 +537,77 @@ def test_full_hr_candidate_workflow_with_review_and_decision_gate(
         else:
             assert asset["playbackUrl"] is None
 
-    blocked = client.post(
-        f"/api/v1/candidates/{candidate_id}/decision",
-        json={"status": "next_stage"},
-    )
+    feedback = "Спасибо за интервью. Нам не хватило глубины в практических примерах Python."
+    initial = {"status": "rejected", "candidateFeedback": feedback}
+    blocked = client.post(f"/api/v1/candidates/{candidate_id}/decision", json=initial)
     assert blocked.status_code == 409
     assert blocked.json()["error"]["code"] == "analysis_review_incomplete"
+    assert (
+        client.post(f"/api/v1/candidates/{candidate_id}/analysis/review", json=initial).status_code
+        == 409
+    )
 
-    for item in analysis_payload["items"]:
-        item_id = item["id"]
-        opened = client.post(
-            f"/api/v1/candidates/{candidate_id}/analysis/review",
-            json={"itemId": item_id, "event": "open", "visible": True, "focused": True},
+    for question in analysis_payload["questions"]:
+        rated = client.put(
+            f"/api/v1/candidates/{candidate_id}/analysis/questions/{question['questionId']}/review",
+            json={"rating": "uncertain"},
         )
-        assert opened.status_code == 200
-        progress = opened
-        for _attempt in range(10):
-            clock.advance(service.heartbeat_grace_seconds)
-            progress = client.post(
-                f"/api/v1/candidates/{candidate_id}/analysis/review",
-                json={
-                    "itemId": item_id,
-                    "event": "heartbeat",
-                    "visible": True,
-                    "focused": True,
-                },
-            )
-            if progress.json()["reviewComplete"]:
-                break
-        assert progress.json()["reviewComplete"]
-
-    unlocked = client.get(f"/api/v1/candidates/{candidate_id}/analysis").json()
+        assert rated.status_code == 200, rated.text
+        assert rated.json()["recommendationLocked"] is True
+        assert rated.json()["recommendation"] is None
+        assert rated.json()["items"] == analysis_payload["items"]
+    # No time advancement is needed. Ratings survive reload, but do not unlock AI.
+    rated = client.get(f"/api/v1/candidates/{candidate_id}/analysis").json()
+    assert rated["reviewComplete"] is True
+    assert all(q["rating"] == "uncertain" for q in rated["questions"])
+    assert rated["initialDecision"] is None
+    revealed = client.post(f"/api/v1/candidates/{candidate_id}/analysis/review", json=initial)
+    assert revealed.status_code == 200, revealed.text
+    unlocked = revealed.json()
     assert unlocked["recommendation"] == "manual_review"
     assert unlocked["recommendationLocked"] is False
+    assert len(unlocked["items"]) > len(analysis_payload["items"])
+    assert any(item["questionId"] is None for item in unlocked["items"])
+    assert unlocked["initialDecision"]["candidateFeedback"] == feedback
+    for item in unlocked["items"]:
+        for evidence in item["evidence"]:
+            assert evidence["quote"].startswith("Подтверждённый ответ")
+            assert evidence["start"] >= 0
+            assert evidence["clipStartSeconds"] is not None
+            assert evidence["clipEndSeconds"] > evidence["clipStartSeconds"]
 
-    reason = "Не подтверждена необходимая глубина Python"
-    feedback = "Спасибо за интервью. Нам не хватило глубины в практических примерах Python."
-    pasted = client.post(
-        f"/api/v1/candidates/{candidate_id}/decision",
-        json={
-            "status": "rejected",
-            "internalReason": reason,
-            "candidateFeedback": feedback,
-            "internalReasonPasteEvents": 1,
-            "internalReasonTypedCharacters": len(reason),
-        },
+    _sign_in_telegram(client, service)
+    assert client.post("/api/v1/invites/resolve", json={"token": invite_token}).status_code == 200
+    assert client.get("/api/v1/candidate/outcome").json()["status"] == "pending"
+    assert client.post("/api/v1/dev/session", json={"userId": "hr-demo"}).status_code == 200
+    # A repeated request is safe; a changed initial judgment after reveal is not.
+    repeated = client.post(f"/api/v1/candidates/{candidate_id}/analysis/review", json=initial)
+    assert repeated.status_code == 200
+    assert repeated.json()["initialDecision"] == unlocked["initialDecision"]
+    assert (
+        client.post(
+            f"/api/v1/candidates/{candidate_id}/analysis/review",
+            json={**initial, "status": "next_stage"},
+        ).status_code
+        == 409
     )
-    assert pasted.status_code == 422
+    assert (
+        client.put(
+            f"/api/v1/candidates/{candidate_id}/analysis/questions/{analysis_payload['questions'][0]['questionId']}/review",
+            json={"rating": "positive"},
+        ).status_code
+        == 409
+    )
+    assert (
+        client.get(f"/api/v1/candidates/{candidate_id}/analysis").json()["initialDecision"]
+        == unlocked["initialDecision"]
+    )
 
-    decision = client.post(
-        f"/api/v1/candidates/{candidate_id}/decision",
-        json={
-            "status": "rejected",
-            "internalReason": reason,
-            "candidateFeedback": feedback,
-            "internalReasonPasteEvents": 0,
-            "internalReasonTypedCharacters": len(reason),
-        },
-    )
+    decision = client.post(f"/api/v1/candidates/{candidate_id}/decision", json=initial)
     assert decision.status_code == 200, decision.text
+    retry = client.post(f"/api/v1/candidates/{candidate_id}/decision", json=initial)
+    assert retry.status_code == 200
+    assert retry.json()["id"] == decision.json()["id"]
     assert client.get(f"/api/v1/candidates/{candidate_id}").json()["processingStatus"] == "ready"
 
     _sign_in_telegram(client, service)
@@ -714,3 +727,138 @@ def test_preexisting_demo_cookie_is_rejected_when_demo_auth_disabled(workflow_cl
     service.allow_demo_auth = False
     assert client.get("/api/v1/session").status_code == 401
     assert client.get("/api/v1/positions").status_code == 401
+
+
+class FixedRecommendationAI(FollowUpWorkflowAI):
+    def __init__(self, recommendation: str) -> None:
+        super().__init__()
+        self.recommendation = recommendation
+
+    async def analyze(self, **kwargs: Any) -> AnalysisDraft:
+        from dataclasses import replace
+
+        return replace(await super().analyze(**kwargs), recommendation=self.recommendation)
+
+
+def _ready_review_candidate(client: TestClient, service: WorkflowService) -> tuple[str, str]:
+    _, candidate_id, _ = _create_hr_position_and_candidate(client, max_follow_up_questions=0)
+    approval = client.post(f"/api/v1/candidates/{candidate_id}/questions/approve").json()
+    interview_id, token = approval["interviewId"], approval["inviteToken"]
+    _sign_in_telegram(client, service)
+    assert client.post("/api/v1/invites/resolve", json={"token": token}).status_code == 200
+    state = client.post(
+        f"/api/v1/interviews/{interview_id}/start", json={"consentToRecording": True}
+    ).json()
+    question = state["currentQuestion"]
+    while question:
+        answer = client.post(
+            f"/api/v1/interviews/{interview_id}/answers",
+            data={"questionId": question["id"]},
+            files={
+                "audio": ("answer.webm", b"TEXT:Python answer", "audio/webm"),
+                "video": ("answer.webm", b"test-video", "video/webm"),
+            },
+        )
+        assert answer.status_code == 200, answer.text
+        question = answer.json()["nextQuestion"]
+    assert client.post(f"/api/v1/interviews/{interview_id}/complete").status_code == 200
+    assert client.post("/api/v1/dev/session", json={"userId": "hr-demo"}).status_code == 200
+    return candidate_id, token
+
+
+@pytest.mark.parametrize(
+    ("recommendation", "initial_status", "final_status", "needs_reason"),
+    [
+        ("fit", "rejected", "next_stage", True),
+        ("not_fit", "next_stage", "rejected", True),
+        ("fit", "next_stage", "next_stage", False),
+        ("not_fit", "rejected", "rejected", False),
+        ("not_fit", "next_stage", "next_stage", False),
+        ("fit", "rejected", "rejected", False),
+        ("manual_review", "next_stage", "next_stage", False),
+    ],
+)
+def test_human_decision_ai_reversal_requires_reason(
+    workflow_client: tuple[TestClient, WorkflowService, MutableClock],
+    recommendation: str,
+    initial_status: str,
+    final_status: str,
+    needs_reason: bool,
+) -> None:
+    client, service, _clock = workflow_client
+    service.ai = FixedRecommendationAI(recommendation)
+    candidate_id, token = _ready_review_candidate(client, service)
+    path = f"/api/v1/candidates/{candidate_id}"
+    questions = client.get(f"{path}/analysis").json()["questions"]
+    for question in questions:
+        assert (
+            client.put(
+                f"{path}/analysis/questions/{question['questionId']}/review",
+                json={"rating": "positive"},
+            ).status_code
+            == 200
+        )
+    # Whitespace is not feedback. Reject it for both outcomes.
+    assert (
+        client.post(
+            f"{path}/analysis/review", json={"status": initial_status, "candidateFeedback": "   "}
+        ).status_code
+        == 422
+    )
+    initial = {"status": initial_status, "candidateFeedback": "Наш первоначальный фидбэк"}
+    assert client.post(f"{path}/analysis/review", json=initial).status_code == 200
+    final = {"status": final_status, "candidateFeedback": "Наш окончательный фидбэк"}
+    result = client.post(f"{path}/decision", json=final)
+    if needs_reason:
+        assert result.status_code == 422
+        assert result.json()["error"]["details"]["field"] == "changeReason"
+        assert (
+            client.post(f"{path}/decision", json={**final, "changeReason": "   "}).status_code
+            == 422
+        )
+        final["changeReason"] = "ИИ указал на упущенный мной аргумент в ответе"
+        result = client.post(f"{path}/decision", json=final)
+    assert result.status_code == 200, result.text
+    persisted = client.get(f"{path}/analysis").json()
+    assert persisted["initialDecision"]["status"] == initial_status
+    assert persisted["initialDecision"]["candidateFeedback"] == initial["candidateFeedback"]
+    assert persisted["finalDecision"]["status"] == final_status
+    assert persisted["changeReason"] == final.get("changeReason", "")
+    # Candidate sees only the final human-approved outcome, never the internal reason.
+    _sign_in_telegram(client, service)
+    assert client.post("/api/v1/invites/resolve", json={"token": token}).status_code == 200
+    outcome = client.get("/api/v1/candidate/outcome").json()
+    assert outcome["status"] == final_status
+    assert outcome["candidateFeedback"] == final["candidateFeedback"]
+    assert "changeReason" not in outcome and "initialDecision" not in outcome
+    assert client.get(f"{path}/analysis").status_code == 403
+
+
+def test_question_ratings_cannot_use_another_candidates_question(
+    workflow_client: tuple[TestClient, WorkflowService, MutableClock],
+) -> None:
+    client, service, _ = workflow_client
+    candidate_id, token = _ready_review_candidate(client, service)
+    _, _, other_questions = _create_hr_position_and_candidate(client)
+    path = f"/api/v1/candidates/{candidate_id}/analysis"
+    assert (
+        client.put(
+            f"{path}/questions/{other_questions[0]['id']}/review", json={"rating": "positive"}
+        ).status_code
+        == 404
+    )
+    questions = client.get(path).json()["questions"]
+    question_path = f"{path}/questions/{questions[0]['questionId']}/review"
+    assert client.put(question_path, json={"rating": "fake"}).status_code == 422
+    assert client.put(question_path, json={"rating": "positive"}).status_code == 200
+    assert client.put(question_path, json={"rating": "negative"}).status_code == 200
+    assert client.get(path).json()["questions"][0]["rating"] == "negative"
+    assert (
+        client.post(
+            f"{path}/review", json={"status": "next_stage", "candidateFeedback": "Хорошие ответы"}
+        ).status_code
+        == 409
+    )
+    _sign_in_telegram(client, service)
+    assert client.post("/api/v1/invites/resolve", json={"token": token}).status_code == 200
+    assert client.put(question_path, json={"rating": "positive"}).status_code == 403

@@ -51,7 +51,7 @@ class WorkflowForbiddenError(WorkflowError):
 
 class ReviewGateError(WorkflowConflictError):
     code = "analysis_review_incomplete"
-    message = "Every required analysis item must be reviewed for at least 10 seconds."
+    message = "Оцените каждый ответ и сохраните своё решение с фидбэком перед рекомендацией ИИ."
 
 
 class WorkflowProviderError(WorkflowError):

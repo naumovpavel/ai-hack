@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def to_camel(value: str) -> str:
@@ -157,8 +157,8 @@ class InterviewBriefingResponse(ApiModel):
         "evaluate appearance, accent, voice, emotions, or protected characteristics."
     )
     human_review_notice: str = (
-        "The hiring team must open every analysis item and spend at least 10 seconds "
-        "reviewing each item before it can record a decision."
+        "The hiring team evaluates each answer and records its own decision and feedback "
+        "before seeing the AI recommendation. Only the confirmed human decision is published."
     )
 
 
@@ -210,9 +210,29 @@ class AnalysisItemResponse(ApiModel):
     question_id: str | None = None
     answer_text: str | None = None
     evidence: list[AnalysisEvidenceResponse]
-    required_review: bool
-    reviewed_seconds: float = 0
-    review_complete: bool = False
+
+
+QuestionRating = Literal["positive", "negative", "uncertain"]
+
+
+class QuestionReviewRequest(ApiModel):
+    rating: QuestionRating
+
+
+class QuestionReviewResponse(ApiModel):
+    question_id: str
+    text: str
+    topic: str
+    kind: str
+    answer_text: str | None
+    rating: QuestionRating | None = None
+
+
+class InitialDecisionResponse(ApiModel):
+    status: Literal["next_stage", "rejected"]
+    candidate_feedback: str
+    internal_reason: str
+    recorded_at: datetime
 
 
 class AnalysisResponse(ApiModel):
@@ -231,6 +251,10 @@ class AnalysisResponse(ApiModel):
     items: list[AnalysisItemResponse]
     review_complete: bool
     recommendation_locked: bool
+    questions: list[QuestionReviewResponse]
+    initial_decision: InitialDecisionResponse | None = None
+    final_decision: DecisionResponse | None = None
+    change_reason: str = ""
     created_at: datetime
 
 
@@ -255,47 +279,26 @@ class MediaListResponse(ApiModel):
     assets: list[MediaAssetResponse]
 
 
-class ReviewEvent(StrEnum):
-    OPEN = "open"
-    HEARTBEAT = "heartbeat"
-    CLOSE = "close"
-
-
-class ReviewHeartbeatRequest(ApiModel):
-    item_id: str
-    event: ReviewEvent
-    visible: bool = True
-    focused: bool = True
-
-
-class ReviewHeartbeatResponse(ApiModel):
-    item_id: str
-    reviewed_seconds: float
-    review_complete: bool
-    all_items_complete: bool
-
-
 class DecisionStatus(StrEnum):
     NEXT_STAGE = "next_stage"
     REJECTED = "rejected"
 
 
-class DecisionRequest(ApiModel):
+class InitialDecisionRequest(ApiModel):
     status: DecisionStatus
     internal_reason: str = Field(default="", max_length=10_000)
-    candidate_feedback: str = Field(default="", max_length=10_000)
-    internal_reason_paste_events: int = Field(
-        default=0,
-        ge=0,
-        validation_alias=AliasChoices("pasteEvents", "internalReasonPasteEvents"),
-        serialization_alias="pasteEvents",
-    )
-    internal_reason_typed_characters: int = Field(
-        default=0,
-        ge=0,
-        validation_alias=AliasChoices("typedCharacters", "internalReasonTypedCharacters"),
-        serialization_alias="typedCharacters",
-    )
+    candidate_feedback: str = Field(min_length=1, max_length=10_000)
+
+    @field_validator("candidate_feedback")
+    @classmethod
+    def meaningful_feedback(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Добавьте фидбэк кандидату.")
+        return value.strip()
+
+
+class DecisionRequest(InitialDecisionRequest):
+    change_reason: str = Field(default="", max_length=10_000)
 
 
 class DecisionResponse(ApiModel):

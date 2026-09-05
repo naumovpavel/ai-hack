@@ -16,6 +16,7 @@ from interview_api.workflow.entities import (
     CandidateRow,
     DecisionRow,
     HiringResourceRow,
+    HumanReviewRow,
     InterviewRow,
     InviteRow,
     MediaAssetRow,
@@ -26,6 +27,7 @@ from interview_api.workflow.entities import (
     WorkflowBase,
 )
 from interview_api.workflow.errors import (
+    ReviewGateError,
     WorkflowConflictError,
     WorkflowNotFoundError,
     WorkflowValidationError,
@@ -885,102 +887,77 @@ class SqlAlchemyWorkflowRepository(TelegramRepositoryMixin):
                 )
             return row
 
-    async def list_analysis_items_with_progress(
-        self, analysis_id: str, user_id: str
-    ) -> list[tuple[AnalysisItemRow, ReviewProgressRow | None]]:
+    async def list_analysis_items(self, analysis_id: str) -> list[AnalysisItemRow]:
         async with self._sessions() as session:
-            result = await session.execute(
-                select(AnalysisItemRow, ReviewProgressRow)
-                .outerjoin(
-                    ReviewProgressRow,
-                    (ReviewProgressRow.analysis_item_id == AnalysisItemRow.id)
-                    & (ReviewProgressRow.user_id == user_id),
+            return list(
+                await session.scalars(
+                    select(AnalysisItemRow)
+                    .where(AnalysisItemRow.analysis_id == analysis_id)
+                    .order_by(AnalysisItemRow.order_index)
                 )
-                .where(AnalysisItemRow.analysis_id == analysis_id)
-                .order_by(AnalysisItemRow.order_index)
             )
-            return [(item, progress) for item, progress in result.all()]
 
-    async def record_review_event(
+    async def get_human_review(self, analysis_id: str, user_id: str) -> HumanReviewRow | None:
+        async with self._sessions() as session:
+            return await session.scalar(
+                select(HumanReviewRow).where(
+                    HumanReviewRow.analysis_id == analysis_id, HumanReviewRow.user_id == user_id
+                )
+            )
+
+    async def save_human_review(
         self,
         *,
         candidate_id: str,
+        analysis_id: str,
         user_id: str,
-        item_id: str,
-        event: str,
-        visible: bool,
-        focused: bool,
+        question_id: str | None = None,
+        rating: str | None = None,
+        initial_status: str | None = None,
+        feedback: str = "",
+        internal_reason: str = "",
+        required_question_ids: set[str] | None = None,
         now: datetime,
-        required_seconds: float,
-        heartbeat_grace_seconds: float,
-    ) -> ReviewProgressRow:
+    ) -> HumanReviewRow:
         async with self._sessions.begin() as session:
-            item = await session.scalar(
-                select(AnalysisItemRow)
-                .join(AnalysisRow, AnalysisRow.id == AnalysisItemRow.analysis_id)
-                .where(AnalysisItemRow.id == item_id, AnalysisRow.candidate_id == candidate_id)
-            )
-            if item is None:
-                raise WorkflowNotFoundError(
-                    "Analysis item was not found.", details={"itemId": item_id}
-                )
-            progress = await session.scalar(
-                select(ReviewProgressRow)
-                .where(
-                    ReviewProgressRow.analysis_item_id == item_id,
-                    ReviewProgressRow.user_id == user_id,
-                )
+            # Serialize edits/reveal/finalization for this candidate on PostgreSQL.
+            candidate = await session.get(CandidateRow, candidate_id, with_for_update=True)
+            if candidate is None:
+                raise WorkflowNotFoundError()
+            if candidate.hiring_decision != "pending":
+                raise WorkflowConflictError("Решение уже подтверждено.")
+            row = await session.scalar(
+                select(HumanReviewRow)
+                .where(HumanReviewRow.analysis_id == analysis_id, HumanReviewRow.user_id == user_id)
                 .with_for_update()
             )
-            if progress is None:
-                progress = ReviewProgressRow(id=new_id(), analysis_item_id=item_id, user_id=user_id)
-                session.add(progress)
-                await session.flush()
-
-            if event == "open":
-                progress.active = bool(visible and focused)
-                progress.last_heartbeat_at = now if progress.active else None
-            else:
+            if row is None:
+                row = HumanReviewRow(
+                    id=new_id(), analysis_id=analysis_id, user_id=user_id, question_ratings={}
+                )
+                session.add(row)
+            if row.revealed_at is not None:
+                # A network retry must not erase or replace the independent judgment.
                 if (
-                    progress.active
-                    and progress.last_heartbeat_at is not None
-                    and visible
-                    and focused
+                    question_id is None
+                    and row.initial_status == initial_status
+                    and row.initial_feedback == feedback
+                    and row.initial_internal_reason == internal_reason
                 ):
-                    previous = progress.last_heartbeat_at
-                    if previous.tzinfo is None:
-                        previous = previous.replace(tzinfo=UTC)
-                    elapsed = max(0.0, (now - previous).total_seconds())
-                    progress.accumulated_seconds += min(elapsed, heartbeat_grace_seconds)
-                progress.active = event == "heartbeat" and bool(visible and focused)
-                progress.last_heartbeat_at = now if progress.active else None
-
-            if progress.accumulated_seconds >= required_seconds and progress.completed_at is None:
-                progress.completed_at = now
-        return progress
-
-    async def all_required_items_reviewed(
-        self, *, candidate_id: str, user_id: str, required_seconds: float
-    ) -> bool:
-        async with self._sessions() as session:
-            incomplete = await session.scalar(
-                select(func.count(AnalysisItemRow.id))
-                .join(AnalysisRow, AnalysisRow.id == AnalysisItemRow.analysis_id)
-                .outerjoin(
-                    ReviewProgressRow,
-                    (ReviewProgressRow.analysis_item_id == AnalysisItemRow.id)
-                    & (ReviewProgressRow.user_id == user_id),
-                )
-                .where(
-                    AnalysisRow.candidate_id == candidate_id,
-                    AnalysisItemRow.required_review.is_(True),
-                    (
-                        (ReviewProgressRow.id.is_(None))
-                        | (ReviewProgressRow.accumulated_seconds < required_seconds)
-                    ),
-                )
-            )
-            return int(incomplete or 0) == 0
+                    return row
+                raise WorkflowConflictError("Первоначальная оценка уже сохранена перед показом ИИ.")
+            if question_id is not None and rating is not None:
+                row.question_ratings = {**row.question_ratings, question_id: rating}
+            if initial_status is not None:
+                if not required_question_ids or not required_question_ids.issubset(
+                    row.question_ratings
+                ):
+                    raise ReviewGateError()
+                row.initial_status = initial_status
+                row.initial_feedback = feedback
+                row.initial_internal_reason = internal_reason
+                row.revealed_at = now
+        return row
 
     async def save_decision(
         self,
@@ -990,15 +967,35 @@ class SqlAlchemyWorkflowRepository(TelegramRepositoryMixin):
         status: str,
         internal_reason: str,
         candidate_feedback: str,
-        paste_events: int,
-        typed_characters: int,
+        analysis_id: str,
+        change_reason: str,
     ) -> DecisionRow:
         async with self._sessions.begin() as session:
+            candidate = await session.get(CandidateRow, candidate_id, with_for_update=True)
+            if candidate is None:
+                raise WorkflowNotFoundError(details={"candidateId": candidate_id})
+            review = await session.scalar(
+                select(HumanReviewRow)
+                .where(
+                    HumanReviewRow.analysis_id == analysis_id, HumanReviewRow.user_id == decided_by
+                )
+                .with_for_update()
+            )
+            if review is None or review.revealed_at is None:
+                raise ReviewGateError()
             existing = await session.scalar(
                 select(DecisionRow).where(DecisionRow.candidate_id == candidate_id)
             )
             if existing is not None:
-                raise WorkflowConflictError("A hiring decision has already been recorded.")
+                if (
+                    existing.status == status
+                    and existing.internal_reason == internal_reason
+                    and existing.candidate_feedback == candidate_feedback
+                    and review.change_reason == change_reason
+                ):
+                    return existing
+                raise WorkflowConflictError("Решение уже подтверждено.")
+            review.change_reason = change_reason
             row = DecisionRow(
                 id=new_id(),
                 candidate_id=candidate_id,
@@ -1006,13 +1003,8 @@ class SqlAlchemyWorkflowRepository(TelegramRepositoryMixin):
                 status=status,
                 internal_reason=internal_reason,
                 candidate_feedback=candidate_feedback,
-                internal_reason_paste_events=paste_events,
-                internal_reason_typed_characters=typed_characters,
             )
             session.add(row)
-            candidate = await session.get(CandidateRow, candidate_id, with_for_update=True)
-            if candidate is None:
-                raise WorkflowNotFoundError(details={"candidateId": candidate_id})
             candidate.hiring_decision = status
             # The analysis remains available after the human decision. The
             # separate hiring_decision field carries the terminal outcome.

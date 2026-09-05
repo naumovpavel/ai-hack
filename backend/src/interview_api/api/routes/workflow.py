@@ -41,15 +41,15 @@ from interview_api.workflow.schemas import (
     DecisionRequest,
     DecisionResponse,
     DevSessionRequest,
+    InitialDecisionRequest,
     InterviewBriefingResponse,
     InterviewStateResponse,
     MediaListResponse,
     PositionDetailResponse,
     PositionResponse,
     QuestionResponse,
+    QuestionReviewRequest,
     ResolveInviteRequest,
-    ReviewHeartbeatRequest,
-    ReviewHeartbeatResponse,
     SessionResponse,
     StartInterviewRequest,
     UpdateQuestionRequest,
@@ -468,16 +468,34 @@ async def get_candidate_media(candidate_id: str, request: Request) -> MediaListR
     return await service.list_media(actor=actor, candidate_id=candidate_id)
 
 
-@router.post(
-    "/candidates/{candidate_id}/analysis/review",
-    response_model=ReviewHeartbeatResponse,
+@router.put(
+    "/candidates/{candidate_id}/analysis/questions/{question_id}/review",
+    response_model=AnalysisResponse,
     responses=ERROR_RESPONSES,
 )
-async def review_analysis_item(
+async def rate_interview_question(
     candidate_id: str,
-    payload: ReviewHeartbeatRequest,
+    question_id: str,
+    payload: QuestionReviewRequest,
     request: Request,
-) -> ReviewHeartbeatResponse:
+) -> AnalysisResponse:
+    service = _service(request)
+    actor = await service.require_actor(_session_token(request), role="hr")
+    return await service.rate_question(
+        actor=actor, candidate_id=candidate_id, question_id=question_id, request=payload
+    )
+
+
+@router.post(
+    "/candidates/{candidate_id}/analysis/review",
+    response_model=AnalysisResponse,
+    responses=ERROR_RESPONSES,
+)
+async def record_independent_review(
+    candidate_id: str,
+    payload: InitialDecisionRequest,
+    request: Request,
+) -> AnalysisResponse:
     service = _service(request)
     actor = await service.require_actor(_session_token(request), role="hr")
     return await service.record_review(actor=actor, candidate_id=candidate_id, request=payload)

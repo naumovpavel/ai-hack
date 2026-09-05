@@ -18,8 +18,8 @@ import type {
   InterviewState,
   PositionDetail,
   PositionSummary,
-  ReviewEvent,
-  ReviewProgress,
+  QuestionRating,
+  InitialDecisionInput,
   Session,
   User,
   ContextDocument,
@@ -729,14 +729,26 @@ export const api = {
     );
   },
 
-  trackAnalysisReview(
+  rateInterviewQuestion(
     candidateId: string,
-    event: ReviewEvent,
+    questionId: string,
+    rating: QuestionRating,
     signal?: AbortSignal,
-  ): Promise<ReviewProgress> {
-    return required<ReviewProgress>(
+  ): Promise<Analysis> {
+    return required<Analysis>(
+      `/candidates/${encodeURIComponent(candidateId)}/analysis/questions/${encodeURIComponent(questionId)}/review`,
+      jsonRequest({ rating }, { method: 'PUT', signal }),
+    );
+  },
+
+  revealAiRecommendation(
+    candidateId: string,
+    decision: InitialDecisionInput,
+    signal?: AbortSignal,
+  ): Promise<Analysis> {
+    return required<Analysis>(
       `/candidates/${encodeURIComponent(candidateId)}/analysis/review`,
-      jsonRequest(event, { method: 'POST', signal }),
+      jsonRequest(decision, { method: 'POST', signal }),
     );
   },
 
