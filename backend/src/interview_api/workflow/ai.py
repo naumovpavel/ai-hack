@@ -72,6 +72,7 @@ class WorkflowAIGateway(Protocol):
         seed_questions: list[str],
         question_count: int,
         duration_minutes: int,
+        interview_context: dict[str, object] | None = None,
     ) -> list[QuestionProposal]: ...
 
     async def transcribe(
@@ -115,8 +116,9 @@ class DeterministicWorkflowAI:
         seed_questions: list[str],
         question_count: int,
         duration_minutes: int,
+        interview_context: dict[str, object] | None = None,
     ) -> list[QuestionProposal]:
-        del duration_minutes
+        del duration_minutes, interview_context
         topics = requirements or ["Опыт по вакансии"]
         proposals = [
             QuestionProposal(

@@ -995,10 +995,13 @@
 }
 
 .voice-orb {
+  --voice-level: 0;
+  --voice-blue: 81 126 242;
+  --voice-violet: 129 111 229;
   position: relative;
   display: grid;
-  width: clamp(165px, 20vw, 220px);
-  height: clamp(165px, 20vw, 220px);
+  width: clamp(260px, 32vw, 350px);
+  height: clamp(260px, 32vw, 350px);
   place-items: center;
   border-radius: 999px;
   outline: none;
@@ -1014,34 +1017,62 @@
   opacity: 1;
 }
 
-.orb-wave {
+.orb-wave-field {
   position: absolute;
   inset: 0;
   z-index: -1;
-  border-radius: inherit;
-  transition: transform 110ms linear, background 260ms ease;
+  pointer-events: none;
+  transform: scale(calc(1 + var(--voice-level) * 0.22));
+  transition: transform 100ms linear;
 }
 
-.orb-wave-one {
-  transform: scale(var(--orb-scale, 1.08));
-  opacity: 0.58;
+.orb-wave {
+  position: absolute;
+  inset: 8%;
+  border-radius: 43% 57% 62% 38% / 52% 39% 61% 48%;
+  background:
+    radial-gradient(ellipse at 22% 32%, rgb(var(--voice-blue) / 78%), transparent 60%),
+    radial-gradient(ellipse at 80% 64%, rgb(var(--voice-violet) / 68%), transparent 60%),
+    radial-gradient(ellipse at 38% 86%, rgb(109 192 245 / 58%), transparent 64%);
+  mask-image: radial-gradient(ellipse, transparent 20%, #000 43% 57%, transparent 76%);
+  filter: blur(12px);
+  opacity: calc(0.52 + var(--voice-level) * 0.27);
+  animation: voice-drift 7s ease-in-out infinite alternate;
+  will-change: transform;
 }
 
 .orb-wave-two {
-  transform: scale(calc(var(--orb-scale, 1.08) + 0.12));
-  opacity: 0.23;
+  inset: 2% -3%;
+  filter: blur(19px);
+  animation: voice-drift-wide 9s ease-in-out -4s infinite alternate;
+  opacity: calc(0.35 + var(--voice-level) * 0.18);
+}
+
+.orb-wave-three {
+  inset: 12% 5%;
+  filter: blur(8px);
+  animation: voice-drift 6s ease-in-out -3s infinite alternate-reverse;
+  opacity: 0.44;
+}
+
+.orb-wave-four {
+  inset: -4% 4%;
+  filter: blur(23px);
+  animation: voice-drift-wide 11s ease-in-out -7s infinite alternate-reverse;
+  opacity: calc(0.22 + var(--voice-level) * 0.26);
 }
 
 .orb-core {
   display: grid;
-  width: 64%;
-  height: 64%;
+  width: 72px;
+  height: 72px;
   place-items: center;
-  border: 1px solid rgb(255 255 255 / 34%);
+  border: 1px solid rgb(var(--voice-blue) / 15%);
   border-radius: inherit;
-  color: white;
-  box-shadow: inset 0 0 35px rgb(255 255 255 / 13%), 0 18px 45px rgb(49 54 131 / 22%);
-  backdrop-filter: blur(16px);
+  color: #435daa;
+  background: color-mix(in oklab, var(--background) 87%, transparent);
+  box-shadow: 0 6px 24px rgb(var(--voice-blue) / 10%);
+  transition: box-shadow 180ms ease, transform 180ms ease;
 }
 
 .orb-core svg {
@@ -1049,26 +1080,29 @@
   height: 27px;
 }
 
-.orb-asking .orb-wave,
-.orb-asking .orb-core {
-  background: linear-gradient(145deg, #685ee9, #4f7fe6 66%, #6b62cf);
+.orb-idle .orb-wave {
+  animation-play-state: paused;
+  opacity: 0.22;
 }
 
-.orb-asking .orb-wave-one {
-  animation: voice-breathe 1.5s ease-in-out infinite alternate;
+.orb-answering {
+  --voice-blue: 48 162 183;
+  --voice-violet: 78 130 224;
 }
 
-.orb-asking .orb-wave-two {
-  animation: voice-breathe-wide 1.9s ease-in-out infinite alternate;
-}
-
-.orb-answering .orb-wave,
 .orb-answering .orb-core {
-  background: linear-gradient(145deg, #25a99d, #4c8fea 64%, #4f75da);
+  color: #21777e;
 }
 
 .orb-answering:not(:disabled):hover .orb-core {
-  filter: brightness(1.05);
+  transform: scale(1.06);
+  box-shadow: 0 7px 28px rgb(var(--voice-blue) / 20%);
+}
+
+.voice-status {
+  position: relative;
+  max-width: 600px;
+  padding: 0 16px;
 }
 
 .interview-progress-wrap {
@@ -1216,21 +1250,23 @@
   }
 }
 
-@keyframes voice-breathe {
+@keyframes voice-drift {
   from {
-    transform: scale(1.02) rotate(-2deg);
+    transform: rotate(-24deg) scale(0.96, 1.08);
+    border-radius: 43% 57% 62% 38% / 52% 39% 61% 48%;
   }
   to {
-    transform: scale(1.16) rotate(2deg);
+    transform: rotate(38deg) scale(1.12, 0.98);
+    border-radius: 62% 38% 42% 58% / 36% 57% 43% 64%;
   }
 }
 
-@keyframes voice-breathe-wide {
+@keyframes voice-drift-wide {
   from {
-    transform: scale(1.11);
+    transform: rotate(46deg) scale(1.04, 0.92);
   }
   to {
-    transform: scale(1.27);
+    transform: rotate(-28deg) scale(0.95, 1.13);
   }
 }
 

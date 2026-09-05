@@ -40,6 +40,7 @@ from interview_api.workflow.errors import (
     WorkflowUnauthorizedError,
     WorkflowValidationError,
 )
+from interview_api.workflow.hiring_service import HiringWorkflowMixin
 from interview_api.workflow.repository import SqlAlchemyWorkflowRepository
 from interview_api.workflow.schemas import (
     AnalysisEvidenceResponse,
@@ -69,7 +70,7 @@ from interview_api.workflow.schemas import (
 from interview_api.workflow.storage import ObjectStorage
 
 
-class WorkflowService:
+class WorkflowService(HiringWorkflowMixin):
     def __init__(
         self,
         *,
@@ -113,6 +114,7 @@ class WorkflowService:
         await self.storage.ensure_bucket()
         await self.repository.recover_interrupted_analyses()
         await self.repository.ensure_demo_users()
+        await self._migrate_legacy_hiring()
 
     async def list_demo_users(self) -> list[UserResponse]:
         await self.repository.ensure_demo_users()
@@ -385,7 +387,7 @@ class WorkflowService:
     async def start_interview(self, *, actor: UserRow, interview_id: str) -> InterviewStateResponse:
         interview = await self._candidate_interview(actor, interview_id)
         candidate = await self.repository.get_candidate(interview.candidate_id)
-        position = await self.repository.get_position(candidate.position_id)
+        position = await self._candidate_position(candidate)
         now = self._now()
         interview = await self.repository.start_interview(
             interview.id,
@@ -541,7 +543,7 @@ class WorkflowService:
         transcript = answer.transcript
 
         candidate = await self.repository.get_candidate(interview.candidate_id)
-        position = await self.repository.get_position(candidate.position_id)
+        position = await self._candidate_position(candidate)
         remaining_base = await self.repository.remaining_base_questions(interview.id)
         remaining_seconds = self._remaining_seconds(interview, self._now())
         follow_up_added = False
@@ -647,7 +649,7 @@ class WorkflowService:
                 details={"nextQuestionId": remaining.id},
             )
         candidate = await self.repository.get_candidate(interview.candidate_id)
-        position = await self.repository.get_position(candidate.position_id)
+        position = await self._candidate_position(candidate)
         await self.repository.set_interview_status(interview.id, "analyzing")
         analysis_input = [
             {
@@ -836,7 +838,7 @@ class WorkflowService:
         self, actor: UserRow, candidate_id: str
     ) -> tuple[CandidateRow, PositionRow]:
         candidate = await self.repository.get_candidate(candidate_id)
-        position = await self.repository.get_position(candidate.position_id)
+        position = await self._candidate_position(candidate)
         self._require_position_owner(actor, position)
         return candidate, position
 
@@ -851,7 +853,7 @@ class WorkflowService:
     async def _briefing(
         self, candidate: CandidateRow, interview: InterviewRow
     ) -> InterviewBriefingResponse:
-        position = await self.repository.get_position(candidate.position_id)
+        position = await self._candidate_position(candidate)
         questions = [
             row
             for row in await self.repository.list_questions(candidate.id)
@@ -1258,9 +1260,7 @@ class WorkflowService:
                 continue
             raw_clip_start = evidence.get("clip_start_seconds")
             raw_clip_end = evidence.get("clip_end_seconds")
-            clip_start = (
-                float(raw_clip_start) if isinstance(raw_clip_start, (int, float)) else None
-            )
+            clip_start = float(raw_clip_start) if isinstance(raw_clip_start, (int, float)) else None
             clip_end = float(raw_clip_end) if isinstance(raw_clip_end, (int, float)) else None
             if clip_start is None or clip_end is None or clip_end <= clip_start:
                 clip_start = clip_end = None

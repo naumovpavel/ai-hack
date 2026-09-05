@@ -7,6 +7,7 @@ object store, so the product can be exercised immediately on a developer Mac.
 
 from __future__ import annotations
 
+import os
 import secrets
 from pathlib import Path
 from urllib.parse import quote
@@ -76,12 +77,14 @@ class LocalObjectStorage:
         return self._path(key), filename, inline
 
 
-settings = Settings(app_env="test", _env_file=None)
-engine = create_async_engine(
-    "sqlite+aiosqlite:////private/tmp/signal-interview-demo.sqlite3"
-)
+settings = Settings(app_env="test", _env_file=Path(__file__).resolve().parents[3] / ".env")
+engine = create_async_engine(os.environ.get(
+    "SIGNAL_LOCAL_DATABASE_URL", "sqlite+aiosqlite:////private/tmp/signal-interview-demo.sqlite3"
+))
 repository = SqlAlchemyWorkflowRepository.from_engine(engine)
-storage = LocalObjectStorage(Path("/private/tmp/signal-interview-media"))
+storage = LocalObjectStorage(Path(os.environ.get(
+    "SIGNAL_LOCAL_MEDIA_ROOT", "/private/tmp/signal-interview-media"
+)))
 
 key = settings.openrouter_api_key
 ai: WorkflowAIGateway

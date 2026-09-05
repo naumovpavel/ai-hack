@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, inspect, select, text, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from interview_api.workflow.ai import AnalysisDraft, QuestionProposal
@@ -15,6 +15,7 @@ from interview_api.workflow.entities import (
     AuthSessionRow,
     CandidateRow,
     DecisionRow,
+    HiringResourceRow,
     InterviewRow,
     InviteRow,
     MediaAssetRow,
@@ -48,6 +49,20 @@ class SqlAlchemyWorkflowRepository:
     async def initialize(self, engine: AsyncEngine) -> None:
         async with engine.begin() as connection:
             await connection.run_sync(WorkflowBase.metadata.create_all)
+            # Additive migration keeps existing local SQLite and PostgreSQL data intact.
+            for table, column, declaration in (
+                ("workflow_positions", "role", "VARCHAR(240) NOT NULL DEFAULT ''"),
+                ("workflow_candidates", "interview_plan_id", "VARCHAR(36) NULL"),
+            ):
+                columns = await connection.run_sync(
+                    lambda conn, table=table: {
+                        item["name"] for item in inspect(conn).get_columns(table)
+                    }
+                )
+                if column not in columns:
+                    await connection.execute(
+                        text(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
+                    )
 
     async def ensure_demo_users(self) -> None:
         async with self._sessions.begin() as session:
@@ -132,11 +147,13 @@ class SqlAlchemyWorkflowRepository:
         vacancy_content_type: str,
         vacancy_text: str,
         seed_questions: list[str],
+        role: str = "",
     ) -> PositionRow:
         row = PositionRow(
             id=new_id(),
             created_by=created_by,
             title=title,
+            role=role,
             level=level,
             location=location,
             requirements=requirements,
@@ -193,10 +210,12 @@ class SqlAlchemyWorkflowRepository:
         resume_filename: str,
         resume_content_type: str,
         resume_text: str,
+        interview_plan_id: str | None = None,
     ) -> CandidateRow:
         candidate = CandidateRow(
             id=new_id(),
             position_id=position_id,
+            interview_plan_id=interview_plan_id,
             name=name,
             email=email,
             role=role,
@@ -973,4 +992,114 @@ class SqlAlchemyWorkflowRepository:
         async with self._sessions() as session:
             return await session.scalar(
                 select(DecisionRow).where(DecisionRow.candidate_id == candidate_id)
+            )
+
+    async def list_hiring_resources(self, owner: str, kind: str) -> list[HiringResourceRow]:
+        async with self._sessions() as session:
+            return list(
+                await session.scalars(
+                    select(HiringResourceRow)
+                    .where(HiringResourceRow.created_by == owner, HiringResourceRow.kind == kind)
+                    .order_by(HiringResourceRow.created_at)
+                )
+            )
+
+    async def get_hiring_resource(
+        self, resource_id: str, owner: str, kind: str
+    ) -> HiringResourceRow:
+        async with self._sessions() as session:
+            row = await session.get(HiringResourceRow, resource_id)
+            if row is None or row.created_by != owner or row.kind != kind:
+                raise WorkflowNotFoundError("Resource was not found.")
+            return row
+
+    async def save_hiring_resources(self, resources: list[HiringResourceRow]) -> None:
+        async with self._sessions.begin() as session:
+            for row in resources:
+                await session.merge(row)
+
+    async def update_vacancy(self, position_id: str, changes: dict) -> PositionRow:
+        async with self._sessions.begin() as session:
+            row = await session.get(PositionRow, position_id)
+            if row is None:
+                raise WorkflowNotFoundError("Vacancy was not found.")
+            for field, value in changes.items():
+                setattr(row, field, value)
+        return row
+
+    async def list_company_candidates(self, owner: str) -> list[tuple[CandidateRow, PositionRow]]:
+        async with self._sessions() as session:
+            rows = await session.execute(
+                select(CandidateRow, PositionRow)
+                .join(PositionRow, CandidateRow.position_id == PositionRow.id)
+                .where(PositionRow.created_by == owner)
+                .order_by(CandidateRow.created_at.desc())
+            )
+            return list(rows.all())
+
+    async def save_prepared_candidate(
+        self,
+        *,
+        draft_id: str,
+        owner: str,
+        candidate_fields: dict,
+        proposals: Sequence[QuestionProposal],
+    ) -> CandidateRow:
+        async with self._sessions.begin() as session:
+            draft = await session.scalar(
+                select(HiringResourceRow)
+                .where(
+                    HiringResourceRow.id == draft_id,
+                    HiringResourceRow.created_by == owner,
+                    HiringResourceRow.kind == "candidate_draft",
+                )
+                .with_for_update()
+            )
+            if draft is None:
+                raise WorkflowNotFoundError("Candidate draft was not found.")
+            existing_id = draft.payload.get("candidateId")
+            if existing_id:
+                return await session.get(CandidateRow, existing_id)
+            candidate = CandidateRow(id=new_id(), **candidate_fields)
+            session.add(candidate)
+            await session.flush()
+            session.add(
+                UserRow(
+                    id=new_id(),
+                    role="candidate",
+                    name=candidate.name,
+                    email=candidate.email,
+                    candidate_id=candidate.id,
+                )
+            )
+            session.add_all(
+                [
+                    QuestionRow(
+                        id=new_id(),
+                        candidate_id=candidate.id,
+                        order_index=index,
+                        kind=proposal.kind,
+                        text=proposal.text,
+                        topic=proposal.topic,
+                        competency=proposal.competency,
+                        source_refs=proposal.source_refs,
+                        status="draft",
+                    )
+                    for index, proposal in enumerate(proposals)
+                ]
+            )
+            draft.payload = {**draft.payload, "candidateId": candidate.id}
+        return candidate
+
+    async def attach_legacy_interview_plan(self, plan: HiringResourceRow, position_id: str) -> None:
+        async with self._sessions.begin() as session:
+            if await session.get(HiringResourceRow, plan.id) is None:
+                session.add(plan)
+            await session.execute(
+                update(CandidateRow)
+                .where(
+                    CandidateRow.position_id == position_id,
+                    CandidateRow.interview_plan_id.is_(None),
+                )
+                .values(interview_plan_id=plan.id)
             )

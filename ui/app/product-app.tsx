@@ -271,9 +271,6 @@ export function AppShell() {
         <Brand />
         {loadState === 'ready' && currentUser ? (
           <div className="ml-auto flex items-center gap-3">
-            <span className="hidden rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground md:inline-flex">
-              Локальное окружение
-            </span>
             <UserSwitcher
               user={currentUser}
               users={users}

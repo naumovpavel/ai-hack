@@ -36,6 +36,81 @@ export type CandidateSummary = {
   processingStatus: ProcessingStatus;
   hiringDecision: HiringDecision;
   createdAt: string;
+  vacancyId?: string;
+  vacancyTitle?: string;
+  interviewPlanId?: string;
+  interviewName?: string;
+};
+
+export type ContextDocument = {
+  id: string;
+  filename: string;
+  text: string;
+  status: 'ready';
+  createdAt: string;
+};
+
+export type VacancyFields = {
+  title: string;
+  role: string;
+  level: string;
+  description: string;
+  requirements: string[];
+};
+
+export type VacancyTemplate = VacancyFields & { id: string; adapted: boolean };
+export type InterviewTemplate = {
+  id: string;
+  name: string;
+  description: string;
+  evaluates: string[];
+  adapted: boolean;
+};
+export type EditableQuestion = {
+  text: string;
+  topic: string;
+  competency: string;
+};
+export type InterviewSettings = {
+  maxFollowUpQuestions: number;
+  maxPersonalizedQuestions: number;
+  durationMinutes: number;
+};
+export type InterviewPlanDraft = InterviewSettings & {
+  templateId: string;
+  name: string;
+  description: string;
+  evaluates: string[];
+  questions: EditableQuestion[];
+};
+export type InterviewPlan = InterviewPlanDraft & {
+  id: string;
+  vacancyId: string;
+  candidateCount: number;
+  createdAt: string;
+};
+export type Vacancy = VacancyFields & {
+  id: string;
+  status: string;
+  createdAt: string;
+  candidateCount: number;
+  interviewCount: number;
+};
+export type VacancyDetail = Vacancy & { interviews: InterviewPlan[] };
+export type VacancyDraft = VacancyFields & {
+  draftId?: string;
+  templateId?: string;
+};
+export type InterviewPlanDetail = InterviewPlan & {
+  vacancy: Vacancy;
+  candidates: CandidateSummary[];
+};
+export type CandidateDraft = {
+  draftId: string;
+  name: string;
+  email: string;
+  role: string;
+  questions: EditableQuestion[];
 };
 
 export type PositionSummary = {

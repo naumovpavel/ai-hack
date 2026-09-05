@@ -41,10 +41,10 @@ class Settings(BaseSettings):
     # supported below for the legacy single-answer evaluator.
     openrouter_api_key: SecretStr | None = None
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
-    openrouter_chat_model: str = "openai/gpt-4o-mini"
+    openrouter_chat_model: str = "openai/gpt-4.1-mini"
     openrouter_stt_model: str = "openai/whisper-1"
     openrouter_tts_model: str = "google/gemini-3.1-flash-tts-preview"
-    openrouter_tts_voice: str = "Kore"
+    openrouter_tts_voice: str = "Sulafat"
     openrouter_http_referer: str = "http://localhost:3000"
     openrouter_app_title: str = "Signal AI Interview"
 

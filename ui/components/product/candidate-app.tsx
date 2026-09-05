@@ -603,6 +603,7 @@ function InterviewRoom({
   const [phase, setPhase] = useState<
     | 'loading-voice'
     | 'ready-voice'
+    | 'voice-error'
     | 'asking'
     | 'answering'
     | 'uploading'
@@ -624,18 +625,90 @@ function InterviewRoom({
   const [online, setOnline] = useState(() => navigator.onLine);
   const [error, setError] = useState('');
   const [pending, setPending] = useState<PendingAnswer | null>(null);
+  const [voiceAttempt, setVoiceAttempt] = useState(0);
+  const [voiceError, setVoiceError] = useState('');
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const recordingRef = useRef<RecorderBundle | null>(null);
   const answerStartedAtRef = useRef(0);
   const secondsRemainingRef = useRef(state.remainingSeconds);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioUrlRef = useRef<string | null>(null);
-  const speechRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const orbRef = useRef<HTMLButtonElement | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const microphoneAnalyserRef = useRef<AnalyserNode | null>(null);
+  const playbackAnalyserRef = useRef<AnalyserNode | null>(null);
+  const playbackSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
   const hasVideo = stream.getVideoTracks().length > 0;
 
   useEffect(() => {
     if (videoRef.current) videoRef.current.srcObject = stream;
   }, [stream]);
+  useEffect(() => {
+    if (!window.AudioContext) return;
+    let context: AudioContext;
+    try {
+      context = new AudioContext();
+    } catch {
+      // Visual feedback is optional; recording and playback remain available.
+      return;
+    }
+    audioContextRef.current = context;
+    const analyser = context.createAnalyser();
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.75;
+    const source = context.createMediaStreamSource(stream);
+    // The microphone is analysed locally and never connected to the speakers.
+    source.connect(analyser);
+    microphoneAnalyserRef.current = analyser;
+    return () => {
+      source.disconnect();
+      playbackSourceRef.current?.disconnect();
+      microphoneAnalyserRef.current = null;
+      playbackAnalyserRef.current = null;
+      audioContextRef.current = null;
+      void context.close();
+    };
+  }, [stream]);
+  useEffect(() => {
+    const element = orbRef.current;
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    if (!element || reducedMotion.matches) return;
+    const samples = new Uint8Array(256);
+    let frame = 0;
+    let level = 0;
+    const update = () => {
+      const analyser =
+        phase === 'answering'
+          ? microphoneAnalyserRef.current
+          : phase === 'asking'
+            ? playbackAnalyserRef.current
+            : null;
+      let volume = 0;
+      if (analyser) {
+        analyser.getByteTimeDomainData(samples);
+        for (const sample of samples) volume += ((sample - 128) / 128) ** 2;
+        volume = Math.min(1, Math.sqrt(volume / samples.length) * 5);
+      }
+      level += (volume - level) * 0.18;
+      element.style.setProperty('--voice-level', level.toFixed(3));
+      frame = requestAnimationFrame(update);
+    };
+    update();
+    const stopForReducedMotion = () => {
+      cancelAnimationFrame(frame);
+      if (reducedMotion.matches) {
+        element.style.removeProperty('--voice-level');
+      } else {
+        update();
+      }
+    };
+    reducedMotion.addEventListener('change', stopForReducedMotion);
+    return () => {
+      cancelAnimationFrame(frame);
+      reducedMotion.removeEventListener('change', stopForReducedMotion);
+      element.style.removeProperty('--voice-level');
+    };
+  }, [phase]);
   useEffect(() => {
     const onOnline = () => setOnline(true);
     const onOffline = () => setOnline(false);
@@ -680,6 +753,7 @@ function InterviewRoom({
       return;
     }
     try {
+      void audioContextRef.current?.resume().catch(() => undefined);
       recordingRef.current = startRecorders(stream);
       answerStartedAtRef.current = performance.now();
       setAnswerSeconds(0);
@@ -691,28 +765,22 @@ function InterviewRoom({
     }
   }, [answered, onComplete, onTerminalError, question?.orderIndex, stream]);
 
-  const playBrowserFallback = useCallback(() => {
-    if (!question || !('speechSynthesis' in window)) {
-      beginAnswer();
-      return;
-    }
-    const utterance = new SpeechSynthesisUtterance(question.text);
-    utterance.lang = 'ru-RU';
-    utterance.onend = beginAnswer;
-    utterance.onerror = beginAnswer;
-    speechRef.current = utterance;
-    setPhase('asking');
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(utterance);
-  }, [beginAnswer, question]);
-
   const playModelVoice = useCallback(async () => {
-    if (!audioRef.current) return;
+    const audio = audioRef.current;
+    if (!audio) return;
     setPhase('asking');
     try {
-      await audioRef.current.play();
-    } catch {
-      setPhase('ready-voice');
+      void audioContextRef.current?.resume().catch(() => undefined);
+      await audio.play();
+    } catch (caught) {
+      // An old question can finish loading or reject play() after navigation.
+      if (audioRef.current !== audio) return;
+      if (caught instanceof DOMException && caught.name === 'NotAllowedError') {
+        setPhase('ready-voice');
+      } else {
+        setVoiceError('Не удалось воспроизвести озвучку вопроса.');
+        setPhase('voice-error');
+      }
     }
   }, []);
 
@@ -720,11 +788,13 @@ function InterviewRoom({
     if (!question) return;
     const controller = new AbortController();
     let disposed = false;
-    const voiceTimeout = window.setTimeout(() => controller.abort(), 15_000);
+    const voiceTimeout = window.setTimeout(() => controller.abort(), 120_000);
     recordingRef.current = null;
     audioRef.current?.pause();
     if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
-    window.speechSynthesis?.cancel();
+    playbackSourceRef.current?.disconnect();
+    playbackSourceRef.current = null;
+    playbackAnalyserRef.current = null;
 
     api
       .getQuestionSpeech(briefing.interviewId, question.id, controller.signal)
@@ -735,17 +805,33 @@ function InterviewRoom({
         audioUrlRef.current = url;
         const audio = new Audio(url);
         audioRef.current = audio;
+        const context = audioContextRef.current;
+        if (context) {
+          const source = context.createMediaElementSource(audio);
+          const analyser = context.createAnalyser();
+          analyser.fftSize = 256;
+          source.connect(analyser);
+          analyser.connect(context.destination);
+          playbackSourceRef.current = source;
+          playbackAnalyserRef.current = analyser;
+        }
         audio.onended = beginAnswer;
-        audio.onerror = playBrowserFallback;
+        audio.onerror = () => {
+          if (disposed) return;
+          setVoiceError('Не удалось воспроизвести озвучку вопроса.');
+          setPhase('voice-error');
+        };
         void playModelVoice();
       })
       .catch((caught) => {
         window.clearTimeout(voiceTimeout);
         if (disposed) return;
-        notify(
-          `Серверная озвучка не ответила вовремя: ${errorText(caught)}. Используем голос браузера.`,
+        setVoiceError(
+          controller.signal.aborted
+            ? 'Озвучка готовится дольше обычного. Попробуйте ещё раз.'
+            : errorText(caught),
         );
-        playBrowserFallback();
+        setPhase('voice-error');
       });
 
     return () => {
@@ -753,17 +839,22 @@ function InterviewRoom({
       window.clearTimeout(voiceTimeout);
       controller.abort();
       audioRef.current?.pause();
-      window.speechSynthesis?.cancel();
+      if (audioRef.current) {
+        audioRef.current.onended = null;
+        audioRef.current.onerror = null;
+      }
+      audioRef.current = null;
+      playbackSourceRef.current?.disconnect();
+      playbackAnalyserRef.current?.disconnect();
       if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
       audioUrlRef.current = null;
     };
   }, [
     beginAnswer,
     briefing.interviewId,
-    notify,
-    playBrowserFallback,
     playModelVoice,
     question,
+    voiceAttempt,
   ]);
 
   const completeExpiredInterview = useCallback(() => {
@@ -904,7 +995,6 @@ function InterviewRoom({
     }
     const expire = () => {
       audioRef.current?.pause();
-      window.speechSynthesis?.cancel();
       if (answered > 0 || question.orderIndex > 0) {
         completeExpiredInterview();
       } else {
@@ -928,7 +1018,6 @@ function InterviewRoom({
   useEffect(
     () => () => {
       audioRef.current?.pause();
-      window.speechSynthesis?.cancel();
       const active = recordingRef.current;
       if (active) {
         if (active.audio.state !== 'inactive') active.audio.stop();
@@ -1017,7 +1106,8 @@ function InterviewRoom({
             </div>
           )}
           <button
-            className={`voice-orb ${phase === 'answering' ? 'orb-answering' : 'orb-asking'}`}
+            ref={orbRef}
+            className={`voice-orb ${phase === 'answering' ? 'orb-answering' : 'orb-asking'} ${phase === 'asking' || phase === 'answering' ? 'orb-active' : 'orb-idle'}`}
             onClick={() => void finishAnswer()}
             disabled={phase !== 'answering'}
             aria-label={
@@ -1026,11 +1116,15 @@ function InterviewRoom({
                 : 'Подождите озвучку вопроса'
             }
           >
-            <span className="orb-wave orb-wave-one" />
-            <span className="orb-wave orb-wave-two" />
+            <span className="orb-wave-field" aria-hidden="true">
+              <span className="orb-wave orb-wave-one" />
+              <span className="orb-wave orb-wave-two" />
+              <span className="orb-wave orb-wave-three" />
+              <span className="orb-wave orb-wave-four" />
+            </span>
             <span className="orb-core">
               {phase === 'answering' ? (
-                <Check />
+                <Mic />
               ) : phase === 'uploading' || phase === 'completing' ? (
                 <LoaderCircle className="animate-spin" />
               ) : (
@@ -1038,23 +1132,25 @@ function InterviewRoom({
               )}
             </span>
           </button>
-          <div className="mt-6 min-h-20 text-center" aria-live="polite">
+          <div className="voice-status min-h-20 text-center" aria-live="polite">
             <p className="text-sm font-medium">
               {phase === 'loading-voice'
                 ? 'Готовим озвучку вопроса…'
                 : phase === 'ready-voice'
                   ? 'Нажмите, чтобы услышать вопрос'
-                  : phase === 'asking'
-                    ? 'Signal озвучивает вопрос'
-                    : phase === 'answering'
-                      ? `Говорите. Нажмите на круг, когда закончите. Автосохранение через ${formatTimer(MAX_ANSWER_SECONDS - answerSeconds)}.`
-                      : phase === 'uploading'
-                        ? hasVideo
-                          ? 'Загружаем аудио и видео, распознаём речь…'
-                          : 'Загружаем аудио и распознаём речь…'
-                        : phase === 'completing'
-                          ? 'Завершаем интервью и запускаем анализ…'
-                          : 'Ответ не отправлен'}
+                  : phase === 'voice-error'
+                    ? 'Озвучка недоступна'
+                    : phase === 'asking'
+                      ? 'Signal озвучивает вопрос'
+                      : phase === 'answering'
+                        ? `Говорите. Нажмите на микрофон, когда закончите. Автосохранение через ${formatTimer(MAX_ANSWER_SECONDS - answerSeconds)}.`
+                        : phase === 'uploading'
+                          ? hasVideo
+                            ? 'Загружаем аудио и видео, распознаём речь…'
+                            : 'Загружаем аудио и распознаём речь…'
+                          : phase === 'completing'
+                            ? 'Завершаем интервью и запускаем анализ…'
+                            : 'Ответ не отправлен'}
             </p>
             {phase === 'ready-voice' ? (
               <Button
@@ -1067,6 +1163,40 @@ function InterviewRoom({
                 Озвучить вопрос
               </Button>
             ) : null}
+            {phase === 'voice-error' ? (
+              <div className="mx-auto mt-3 max-w-lg">
+                <p className="text-sm text-muted-foreground">{voiceError}</p>
+                <div className="mt-3 flex flex-wrap justify-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setPhase('loading-voice');
+                      setVoiceError('');
+                      setVoiceAttempt((value) => value + 1);
+                    }}
+                    disabled={!online}
+                  >
+                    <RotateCcw data-icon="inline-start" />
+                    Повторить озвучку
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={beginAnswer}>
+                    Прочитать вопрос и ответить
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+            {phase === 'answering' ? (
+              <Button
+                className="mt-3"
+                variant="outline"
+                size="sm"
+                onClick={() => void finishAnswer()}
+              >
+                <Check data-icon="inline-start" />
+                Завершить ответ
+              </Button>
+            ) : null}
             {phase === 'asking' ? (
               <Button
                 variant="ghost"
@@ -1074,7 +1204,6 @@ function InterviewRoom({
                 className="mt-2"
                 onClick={() => {
                   audioRef.current?.pause();
-                  window.speechSynthesis?.cancel();
                   beginAnswer();
                 }}
               >

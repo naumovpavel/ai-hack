@@ -53,8 +53,9 @@ Follow logs with `make logs`. Stop containers without deleting data with
 run `docker compose down --volumes`.
 
 For this local MVP the API creates missing SQLAlchemy tables at startup.
-`create_all` does not upgrade an existing schema; introduce versioned Alembic
-migrations before relying on persistent environments across schema changes.
+The hiring workflow applies additive migrations for vacancy roles and interview
+plan links while preserving existing records. Introduce versioned Alembic
+migrations before relying on persistent environments across further schema changes.
 
 ## What the smoke check proves
 
@@ -65,19 +66,34 @@ to verify the product workflow as well.
 
 ## Manual end-to-end scenario
 
-1. Open the UI as the HR test user and create a position with a vacancy file,
-   requirements, desired question count, duration, and optional seed questions.
-2. Upload a candidate resume, review/edit the generated questions, approve them,
-   and copy the invite URL.
-3. Switch to the candidate test user, open the invite URL, grant camera and
-   microphone permissions, and complete the interview.
-4. Return to the HR user and wait for analysis. Verify audio, video, transcript,
+1. Open **Общий контекст** and upload the company's competency framework or other
+   hiring documents. The backend normalizes each document through the LLM once,
+   stores its text, and adapts the shared vacancy and interview templates.
+2. Inspect **Шаблоны вакансий** using the role and grade filters. Generic IT
+   templates are independent of the example company's materials. Edit company
+   interview descriptions and evaluation criteria in **Шаблоны интервью**.
+3. Create a vacancy by uploading a PDF/DOCX/TXT or selecting a template. Review
+   and edit the title, role, grade, description, and requirements. Questions are
+   generated only when an interview is added. Verify the option to skip adding
+   an interview after vacancy creation.
+4. Add an interview, select its type, and review its shared question pool as
+   editable rows. Set the follow-up limit, personalized-question limit, and
+   duration. These settings belong to the interview, allowing multiple
+   interviews per vacancy.
+5. Add a candidate from the interview overview. Upload a resume, review the
+   profile and personalized question rows, then save. The invite link is copied
+   and the recruiter stays on the interview overview. Check the global candidate
+   search and its vacancy/interview labels.
+6. Open the invite URL, grant camera and microphone permissions, and complete
+   the interview. Questions are spoken through backend OpenRouter TTS; an
+   explicit retry is offered if speech fails.
+7. Return to the HR user and wait for analysis. Verify audio, video, transcript,
    evidence, and recommendation.
-5. Open every required analysis item for at least ten active seconds. Confirm
+8. Open every required analysis item for at least ten active seconds. Confirm
    that an earlier decision attempt is rejected, then invite or reject the
    candidate. For rejection, enter an original internal reason and candidate
    feedback.
-6. Switch back to the candidate and verify that the human decision and feedback
+9. Switch back to the candidate and verify that the human decision and feedback
    are visible.
 
 Use a short interview and small media samples for this smoke run. Model calls go
@@ -86,6 +102,19 @@ through OpenRouter; PostgreSQL, MinIO, the API, and the UI stay local.
 The scripts in `backend/scripts/seed_*.py` are fixtures for
 `interview_api.local_demo` only: they target its temporary SQLite database and
 local file store. They do not seed the Compose PostgreSQL or MinIO services.
+
+For development without Docker, the same API can use SQLite and private local
+files. Set `OPENROUTER_API_KEY` in the ignored repository-root `.env`, then run
+these commands in separate terminals:
+
+```bash
+backend/.venv/bin/uvicorn interview_api.local_demo:app --app-dir backend/src --host 127.0.0.1 --port 8000
+pnpm --dir ui dev --port 3000
+```
+
+The local demo reads that `.env`; without a key it uses a deterministic test gateway.
+`SIGNAL_LOCAL_DATABASE_URL` and `SIGNAL_LOCAL_MEDIA_ROOT` optionally select
+isolated test storage. Existing defaults keep prior demo records available.
 
 ## Current backend checks
 

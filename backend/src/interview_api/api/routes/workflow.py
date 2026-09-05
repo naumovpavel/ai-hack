@@ -12,6 +12,25 @@ from interview_api.workflow.errors import (
     WorkflowNotFoundError,
     WorkflowServiceUnavailableError,
 )
+from interview_api.workflow.hiring_schemas import (
+    CandidateCreateRequest,
+    CandidateDraftResponse,
+    CompanyCandidateSummary,
+    ContextDocumentResponse,
+    InterviewCreateRequest,
+    InterviewDraftResponse,
+    InterviewPlanDetailResponse,
+    InterviewPlanResponse,
+    InterviewTemplateFields,
+    InterviewTemplateResponse,
+    PrepareInterviewRequest,
+    VacancyCreateRequest,
+    VacancyDetailResponse,
+    VacancyDraftResponse,
+    VacancyFields,
+    VacancyResponse,
+    VacancyTemplateResponse,
+)
 from interview_api.workflow.schemas import (
     AnalysisResponse,
     AnswerResponse,
@@ -390,7 +409,7 @@ async def submit_answer(
 @router.get(
     "/interviews/{interview_id}/questions/{question_id}/speech",
     responses={
-        200: {"content": {"audio/mpeg": {}}},
+        200: {"content": {"audio/mpeg": {}, "audio/wav": {}}},
         **ERROR_RESPONSES,
     },
 )
@@ -479,3 +498,194 @@ async def get_candidate_outcome(request: Request) -> CandidateOutcomeResponse:
     service = _service(request)
     actor = await service.require_actor(_session_token(request), role="candidate")
     return await service.candidate_outcome(actor=actor)
+
+
+# Company hiring setup. Existing /positions and candidate-session endpoints are retained
+# for links created before the vacancy → interview-plan hierarchy was introduced.
+
+
+@router.get(
+    "/company-context", response_model=list[ContextDocumentResponse], responses=ERROR_RESPONSES
+)
+async def list_company_context(request: Request):
+    service = _service(request)
+    actor = await service.require_actor(_session_token(request), role="hr")
+    return await service.list_company_context(actor=actor)
+
+
+@router.post("/company-context", response_model=ContextDocumentResponse, responses=ERROR_RESPONSES)
+async def upload_company_context(request: Request, document: Annotated[UploadFile, File()]):
+    service = _service(request)
+    actor = await service.require_actor(_session_token(request), role="hr")
+    return await service.upload_company_context(
+        actor=actor,
+        data=await _read_upload(document, service.max_document_bytes),
+        filename=document.filename or "context.txt",
+        content_type=document.content_type or "application/octet-stream",
+    )
+
+
+@router.get(
+    "/vacancy-templates", response_model=list[VacancyTemplateResponse], responses=ERROR_RESPONSES
+)
+async def list_vacancy_templates(
+    request: Request, role: str | None = None, level: str | None = None
+):
+    service = _service(request)
+    actor = await service.require_actor(_session_token(request), role="hr")
+    return await service.list_vacancy_templates(actor=actor, role=role, level=level)
+
+
+@router.patch(
+    "/vacancy-templates/{template_id}",
+    response_model=VacancyTemplateResponse,
+    responses=ERROR_RESPONSES,
+)
+async def update_vacancy_template(template_id: str, payload: VacancyFields, request: Request):
+    service = _service(request)
+    actor = await service.require_actor(_session_token(request), role="hr")
+    return await service.update_vacancy_template(
+        actor=actor, template_id=template_id, payload=payload
+    )
+
+
+@router.get(
+    "/interview-templates",
+    response_model=list[InterviewTemplateResponse],
+    responses=ERROR_RESPONSES,
+)
+async def list_interview_templates(request: Request):
+    service = _service(request)
+    actor = await service.require_actor(_session_token(request), role="hr")
+    return await service.list_interview_templates(actor=actor)
+
+
+@router.patch(
+    "/interview-templates/{template_id}",
+    response_model=InterviewTemplateResponse,
+    responses=ERROR_RESPONSES,
+)
+async def update_interview_template(
+    template_id: str, payload: InterviewTemplateFields, request: Request
+):
+    service = _service(request)
+    actor = await service.require_actor(_session_token(request), role="hr")
+    return await service.update_interview_template(
+        actor=actor, template_id=template_id, payload=payload
+    )
+
+
+@router.get("/vacancies", response_model=list[VacancyResponse], responses=ERROR_RESPONSES)
+async def list_vacancies(request: Request):
+    service = _service(request)
+    actor = await service.require_actor(_session_token(request), role="hr")
+    return await service.list_vacancies(actor=actor)
+
+
+@router.post("/vacancies/parse", response_model=VacancyDraftResponse, responses=ERROR_RESPONSES)
+async def prepare_vacancy(request: Request, vacancy: Annotated[UploadFile, File()]):
+    service = _service(request)
+    actor = await service.require_actor(_session_token(request), role="hr")
+    return await service.prepare_vacancy(
+        actor=actor,
+        data=await _read_upload(vacancy, service.max_document_bytes),
+        filename=vacancy.filename or "vacancy.txt",
+        content_type=vacancy.content_type or "application/octet-stream",
+    )
+
+
+@router.post("/vacancies", response_model=VacancyDetailResponse, responses=ERROR_RESPONSES)
+async def create_vacancy(payload: VacancyCreateRequest, request: Request):
+    service = _service(request)
+    actor = await service.require_actor(_session_token(request), role="hr")
+    return await service.create_vacancy(actor=actor, payload=payload)
+
+
+@router.get(
+    "/vacancies/{vacancy_id}", response_model=VacancyDetailResponse, responses=ERROR_RESPONSES
+)
+async def get_vacancy(vacancy_id: str, request: Request):
+    service = _service(request)
+    actor = await service.require_actor(_session_token(request), role="hr")
+    return await service.get_vacancy(actor=actor, vacancy_id=vacancy_id)
+
+
+@router.patch(
+    "/vacancies/{vacancy_id}", response_model=VacancyDetailResponse, responses=ERROR_RESPONSES
+)
+async def update_vacancy(vacancy_id: str, payload: VacancyFields, request: Request):
+    service = _service(request)
+    actor = await service.require_actor(_session_token(request), role="hr")
+    return await service.update_vacancy(actor=actor, vacancy_id=vacancy_id, payload=payload)
+
+
+@router.post(
+    "/vacancies/{vacancy_id}/interviews/prepare",
+    response_model=InterviewDraftResponse,
+    responses=ERROR_RESPONSES,
+)
+async def prepare_interview(vacancy_id: str, payload: PrepareInterviewRequest, request: Request):
+    service = _service(request)
+    actor = await service.require_actor(_session_token(request), role="hr")
+    return await service.prepare_interview(
+        actor=actor, vacancy_id=vacancy_id, template_id=payload.template_id
+    )
+
+
+@router.post(
+    "/vacancies/{vacancy_id}/interviews",
+    response_model=InterviewPlanResponse,
+    responses=ERROR_RESPONSES,
+)
+async def create_interview_plan(vacancy_id: str, payload: InterviewCreateRequest, request: Request):
+    service = _service(request)
+    actor = await service.require_actor(_session_token(request), role="hr")
+    return await service.create_interview_plan(actor=actor, vacancy_id=vacancy_id, payload=payload)
+
+
+@router.get(
+    "/interview-plans/{plan_id}",
+    response_model=InterviewPlanDetailResponse,
+    responses=ERROR_RESPONSES,
+)
+async def get_interview_plan(plan_id: str, request: Request):
+    service = _service(request)
+    actor = await service.require_actor(_session_token(request), role="hr")
+    return await service.get_interview_plan(actor=actor, plan_id=plan_id)
+
+
+@router.post(
+    "/interview-plans/{plan_id}/candidates/prepare",
+    response_model=CandidateDraftResponse,
+    responses=ERROR_RESPONSES,
+)
+async def prepare_plan_candidate(
+    plan_id: str, request: Request, resume: Annotated[UploadFile, File()]
+):
+    service = _service(request)
+    actor = await service.require_actor(_session_token(request), role="hr")
+    return await service.prepare_plan_candidate(
+        actor=actor,
+        plan_id=plan_id,
+        data=await _read_upload(resume, service.max_document_bytes),
+        filename=resume.filename or "resume.txt",
+        content_type=resume.content_type or "application/octet-stream",
+    )
+
+
+@router.post(
+    "/interview-plans/{plan_id}/candidates",
+    response_model=ApprovalResponse,
+    responses=ERROR_RESPONSES,
+)
+async def create_plan_candidate(plan_id: str, payload: CandidateCreateRequest, request: Request):
+    service = _service(request)
+    actor = await service.require_actor(_session_token(request), role="hr")
+    return await service.create_plan_candidate(actor=actor, plan_id=plan_id, payload=payload)
+
+
+@router.get("/candidates", response_model=list[CompanyCandidateSummary], responses=ERROR_RESPONSES)
+async def list_all_candidates(request: Request, search: str | None = None):
+    service = _service(request)
+    actor = await service.require_actor(_session_token(request), role="hr")
+    return await service.list_all_candidates(actor=actor, search=search)
