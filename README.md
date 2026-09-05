@@ -64,6 +64,12 @@ and demo HR user exist, the private MinIO bucket exists, and both HTTP processes
 answer inside their containers. After it passes, run the browser scenario below
 to verify the product workflow as well.
 
+## Telegram sign-in
+
+Configure the bot and sign in through Telegram before using either workspace.
+See [TELEGRAM.md](TELEGRAM.md) for setup, role switching, invitations and notifications.
+The demo user switcher is disabled by default.
+
 ## Manual end-to-end scenario
 
 1. Open **Общий контекст** and upload the company's competency framework or other

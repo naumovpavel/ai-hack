@@ -107,7 +107,9 @@ def _service(request: Request) -> WorkflowService:
 
 def _require_demo_mode(request: Request) -> None:
     settings = getattr(request.app.state, "settings", None)
-    if getattr(settings, "app_env", "production") == "production":
+    if (getattr(settings, "app_env", "production") == "production"
+        or not getattr(settings, "demo_auth_enabled", False)
+        or getattr(settings, "telegram_bot_token", None)):
         raise WorkflowNotFoundError("Demo session endpoints are disabled.")
 
 
@@ -161,11 +163,12 @@ async def clear_demo_session(request: Request, response: Response) -> None:
 
 
 @router.get("/session", response_model=UserResponse, responses=ERROR_RESPONSES)
-async def get_current_session(request: Request) -> UserResponse:
+async def get_current_session(request: Request, response: Response) -> UserResponse:
+    response.headers["Cache-Control"] = "no-store"
     token = _session_token(request)
     if token is None:
-        # The UI treats 404 as an intentional first-visit state and then shows
-        # the demo user switcher. Invalid or expired tokens still produce 401.
+        # The UI treats 404 as a first visit and offers Telegram sign-in.
+        # Invalid or expired tokens still produce 401.
         raise WorkflowNotFoundError("No active session was found.")
     return await _service(request).current_session(token)
 
@@ -313,8 +316,14 @@ async def approve_candidate_questions(candidate_id: str, request: Request) -> Ap
 async def resolve_invite(
     payload: ResolveInviteRequest, request: Request, response: Response
 ) -> InterviewBriefingResponse:
+    from interview_api.workflow.telegram_routes import _check_browser_origin
+
+    _check_browser_origin(request)
     service = _service(request)
-    raw_session, _session, briefing = await service.resolve_invite(payload.token)
+    actor = await service.require_actor(_session_token(request))
+    raw_session, _session, briefing = await service.resolve_invite(
+        payload.token, actor=actor, raw_session_token=_session_token(request)
+    )
     _set_session_cookie(response, raw_session, service)
     response.headers["Cache-Control"] = "no-store"
     return briefing

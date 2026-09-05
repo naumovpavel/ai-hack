@@ -27,6 +27,9 @@ class UserRole(StrEnum):
 
 
 class UserResponse(ApiModel):
+    telegram_username: str | None = None
+    telegram_connected: bool = False
+    roles: list[UserRole] = Field(default_factory=list)
     id: str
     role: UserRole
     name: str
@@ -44,6 +47,7 @@ class SessionResponse(ApiModel):
 
 
 class CandidateSummary(ApiModel):
+    telegram_username: str | None = None
     id: str
     position_id: str
     name: str

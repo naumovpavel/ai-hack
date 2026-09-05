@@ -135,6 +135,7 @@ class InterviewPlanDetailResponse(InterviewPlanResponse):
 
 
 class CandidateDraftResponse(ApiModel):
+    telegram_username: str | None = None
     draft_id: str
     name: str
     email: str | None = None
@@ -143,6 +144,7 @@ class CandidateDraftResponse(ApiModel):
 
 
 class CandidateCreateRequest(ApiModel):
+    telegram_username: str | None = Field(default=None, max_length=100)
     draft_id: str
     name: str = Field(min_length=2, max_length=240)
     email: str | None = Field(default=None, max_length=320)

@@ -1,14 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  Check,
-  ChevronDown,
-  LoaderCircle,
-  RotateCcw,
-  ServerCrash,
-} from 'lucide-react';
-
+import { Check, ChevronDown, LoaderCircle, LogOut, Send } from 'lucide-react';
 import { CandidateApp } from '@/components/product/candidate-app';
 import { HrApp } from '@/components/product/hr-app';
 import { Brand } from '@/components/product/shared';
@@ -21,18 +14,20 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { API_BASE_URL, api } from '@/lib/api';
-import type { InterviewBriefing, User } from '@/lib/types';
-
-type LoadState = 'loading' | 'ready' | 'error';
+import { api } from '@/lib/api';
+import type {
+  InterviewBriefing,
+  TelegramLogin,
+  User,
+  UserRole,
+} from '@/lib/types';
 
 function inviteTokenFromLocation() {
   const url = new URL(window.location.href);
-  const queryToken =
-    url.searchParams.get('invite') || url.searchParams.get('token');
-  if (queryToken) return queryToken;
-  const pathMatch = url.pathname.match(/^\/(?:invite|interview)\/([^/]+)\/?$/);
-  return pathMatch?.[1] ? decodeURIComponent(pathMatch[1]) : null;
+  const query = url.searchParams.get('invite') || url.searchParams.get('token');
+  if (query) return query;
+  const match = url.pathname.match(/^\/(?:invite|interview)\/([^/]+)\/?$/);
+  return match?.[1] ? decodeURIComponent(match[1]) : null;
 }
 
 function clearInviteFromLocation() {
@@ -47,221 +42,200 @@ function clearInviteFromLocation() {
   );
 }
 
-function userInitials(name: string) {
-  return name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase())
-    .join('');
-}
+const roleLabel = (role: UserRole) =>
+  role === 'hr' ? 'Кабинет HR' : 'Кабинет кандидата';
+const errorText = (error: unknown) =>
+  error instanceof Error
+    ? error.message
+    : 'Не удалось выполнить запрос. Попробуйте ещё раз.';
 
-function userMeta(user: User) {
-  return user.role === 'hr' ? 'Рекрутер · demo' : 'Кандидат';
-}
-
-function UserSwitcher({
-  user,
-  users,
-  switching,
-  onChange,
-}: {
-  user: User;
-  users: User[];
-  switching: boolean;
-  onChange: (user: User) => void;
-}) {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        className="flex min-h-11 items-center gap-2 rounded-full py-1 pl-1 pr-2 text-left outline-none transition hover:bg-black/[0.04] focus-visible:ring-2 focus-visible:ring-primary/30"
-        disabled={switching}
-      >
-        <span className="grid size-9 place-items-center rounded-full bg-[#e8e7ff] text-xs font-semibold text-[#4540a3]">
-          {userInitials(user.name)}
-        </span>
-        <span className="hidden min-w-0 sm:block">
-          <span className="block max-w-36 truncate text-sm font-medium leading-tight">
-            {user.name}
-          </span>
-          <span className="block text-[11px] leading-tight text-muted-foreground">
-            {switching ? 'Переключаем…' : userMeta(user)}
-          </span>
-        </span>
-        {switching ? (
-          <LoaderCircle className="size-4 animate-spin" />
-        ) : (
-          <ChevronDown className="size-4" />
-        )}
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" sideOffset={8} className="w-64 p-2">
-        <DropdownMenuGroup>
-          <DropdownMenuLabel className="px-2 py-2">
-            Тестовые пользователи
-          </DropdownMenuLabel>
-          {users.map((item) => (
-            <DropdownMenuItem
-              key={item.id}
-              className="min-h-12 cursor-pointer gap-3 px-2"
-              onClick={() => onChange(item)}
-            >
-              <span className="grid size-8 shrink-0 place-items-center rounded-full bg-muted text-[11px] font-semibold">
-                {userInitials(item.name)}
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate font-medium">{item.name}</span>
-                <span className="block text-xs text-muted-foreground">
-                  {userMeta(item)}
-                </span>
-              </span>
-              {item.id === user.id ? (
-                <Check className="size-4 text-primary" aria-label="Выбран" />
-              ) : null}
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-function LoadingView({ label }: { label: string }) {
-  return (
-    <main className="grid min-h-[calc(100dvh-68px)] place-items-center px-5 text-center">
-      <div aria-live="polite" aria-busy="true">
-        <LoaderCircle className="mx-auto size-8 animate-spin text-primary" />
-        <p className="mt-4 text-sm font-medium">{label}</p>
-      </div>
-    </main>
-  );
-}
-
-function ErrorView({
-  message,
-  onRetry,
-}: {
-  message: string;
-  onRetry: () => void;
-}) {
-  return (
-    <main className="grid min-h-[calc(100dvh-68px)] place-items-center px-5 py-12">
-      <div
-        className="surface-card w-full max-w-lg p-7 text-center sm:p-10"
-        role="alert"
-      >
-        <span className="mx-auto grid size-12 place-items-center rounded-2xl bg-rose-50 text-rose-700">
-          <ServerCrash className="size-5" />
-        </span>
-        <h1 className="mt-5 text-xl font-semibold">Backend недоступен</h1>
-        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-          {message}
-        </p>
-        <p className="mt-3 text-xs text-muted-foreground">
-          Ожидаемый адрес API: <code>{API_BASE_URL}</code>
-        </p>
-        <Button className="mt-6" onClick={onRetry}>
-          <RotateCcw data-icon="inline-start" />
-          Повторить
-        </Button>
-      </div>
-    </main>
-  );
+function clearPendingLogin() {
+  try {
+    sessionStorage.removeItem('signal.telegram.login');
+  } catch {
+    /* Optional storage. */
+  }
 }
 
 export function AppShell() {
-  const [loadState, setLoadState] = useState<LoadState>('loading');
-  const [loadMessage, setLoadMessage] = useState('Восстанавливаем сессию…');
-  const [errorMessage, setErrorMessage] = useState('');
-  const [users, setUsers] = useState<User[]>([]);
+  const [loading, setLoading] = useState(true);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [briefing, setBriefing] = useState<InterviewBriefing | null>(null);
-  const [switching, setSwitching] = useState(false);
-  const [reloadKey, setReloadKey] = useState(0);
+  const [inviteToken, setInviteToken] = useState<string | null>(null);
+  const [login, setLogin] = useState<TelegramLogin | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const noticeTimer = useRef<number | null>(null);
-
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [reload, setReload] = useState(0);
+  useEffect(() => {
+    try {
+      if (login)
+        sessionStorage.setItem('signal.telegram.login', JSON.stringify(login));
+    } catch {
+      /* The HttpOnly challenge cookie still protects login. */
+    }
+  }, [login]);
   const notify = useCallback((message: string) => {
     setNotice(message);
-    if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
-    noticeTimer.current = window.setTimeout(() => setNotice(''), 4000);
+    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    noticeTimer.current = setTimeout(() => setNotice(''), 4000);
   }, []);
 
   useEffect(() => {
     const controller = new AbortController();
     const bootstrap = async () => {
-      setLoadState('loading');
-      setLoadMessage('Восстанавливаем сессию…');
-      setErrorMessage('');
+      setLoading(true);
+      setError('');
+      const token = inviteTokenFromLocation();
+      setInviteToken(token);
       try {
-        const availableUsers = await api.listUsers(controller.signal);
-        if (!availableUsers.length)
-          throw new Error('Backend не вернул тестовых пользователей.');
-
-        const inviteToken = inviteTokenFromLocation();
-        let resolvedBriefing: InterviewBriefing | null = null;
-        if (inviteToken) {
-          setLoadMessage('Открываем персональное приглашение…');
-          resolvedBriefing = await api.resolveInvite(
-            inviteToken,
-            controller.signal,
-          );
+        let user = await api.getSession(controller.signal);
+        if (!user && !controller.signal.aborted) {
+          try {
+            const saved = sessionStorage.getItem('signal.telegram.login');
+            if (saved) {
+              const challenge = JSON.parse(saved) as TelegramLogin;
+              if (
+                Date.parse(challenge.expiresAt) > Date.now() &&
+                /^https:\/\/t\.me\/[A-Za-z0-9_]+\?start=[A-Za-z0-9_-]+$/.test(
+                  challenge.botUrl,
+                )
+              )
+                setLogin(challenge);
+              else clearPendingLogin();
+            }
+          } catch {
+            /* Storage may be unavailable in a private browser. */
+          }
         }
-
-        let sessionUser = await api.getSession(controller.signal);
-        if (!sessionUser) {
-          sessionUser = (
-            await api.setSession(availableUsers[0].id, controller.signal)
-          ).user;
+        if (!controller.signal.aborted)
+          setCurrentUser(user?.telegramConnected ? user : null);
+        let resolved: InterviewBriefing | null = null;
+        if (user?.telegramConnected && token) {
+          resolved = await api.resolveInvite(token, controller.signal);
+          user = await api.getSession(controller.signal);
+          if (!controller.signal.aborted) {
+            clearInviteFromLocation();
+            setInviteToken(null);
+          }
         }
         if (controller.signal.aborted) return;
-
-        setUsers(
-          availableUsers.some((item) => item.id === sessionUser.id)
-            ? availableUsers
-            : [...availableUsers, sessionUser],
-        );
-        setCurrentUser(sessionUser);
-        setBriefing(resolvedBriefing);
-        if (inviteToken) clearInviteFromLocation();
-        setLoadState('ready');
-      } catch (error) {
-        if (controller.signal.aborted) return;
-        setErrorMessage(
-          error instanceof Error
-            ? error.message
-            : 'Не удалось загрузить приложение.',
-        );
-        setLoadState('error');
+        // Only a Telegram-confirmed identity opens the product.
+        setCurrentUser(user?.telegramConnected ? user : null);
+        setBriefing(resolved);
+      } catch (caught) {
+        if (!controller.signal.aborted) setError(errorText(caught));
+      } finally {
+        if (!controller.signal.aborted) setLoading(false);
       }
     };
     void bootstrap();
     return () => controller.abort();
-  }, [reloadKey]);
+  }, [reload]);
+
+  useEffect(() => {
+    if (!login) return;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      if (Date.now() >= Date.parse(login.expiresAt)) {
+        clearPendingLogin();
+        setLogin(null);
+        setError(
+          'Время ожидания истекло. Нажмите «Войти через Telegram» ещё раз.',
+        );
+        return;
+      }
+      try {
+        const result = await api.telegramLoginStatus(controller.signal);
+        if (controller.signal.aborted) return;
+        if (result.status === 'authenticated') {
+          clearPendingLogin();
+          setLogin(null);
+          setReload((value) => value + 1);
+          return;
+        }
+        if (result.status === 'expired') {
+          clearPendingLogin();
+          setLogin(null);
+          setError('Ссылка для входа истекла. Начните вход ещё раз.');
+          return;
+        }
+        setError('');
+      } catch (caught) {
+        if (controller.signal.aborted) return;
+        setError(errorText(caught));
+      }
+      timer = setTimeout(() => void poll(), 1800);
+    };
+    void poll();
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, [login]);
 
   useEffect(
     () => () => {
-      if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
+      if (noticeTimer.current) clearTimeout(noticeTimer.current);
     },
     [],
   );
 
-  const switchUser = async (user: User) => {
-    if (switching || user.id === currentUser?.id) return;
-    setSwitching(true);
+  const signIn = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError('');
+    // Open during the click so mobile/desktop popup blockers allow the bot tab.
+    const botWindow = window.open('about:blank', '_blank');
+    if (botWindow) botWindow.opener = null;
     try {
-      const session = await api.setSession(user.id);
-      clearInviteFromLocation();
-      setBriefing(null);
-      setCurrentUser(session.user);
-      notify(`Вы вошли как ${session.user.name}`);
-    } catch (error) {
-      notify(
-        error instanceof Error
-          ? error.message
-          : 'Не удалось переключить пользователя.',
+      const challenge = await api.startTelegramLogin(
+        inviteToken ? 'candidate' : 'hr',
+        inviteToken,
       );
+      setLogin(challenge);
+      if (botWindow) botWindow.location.href = challenge.botUrl;
+    } catch (caught) {
+      botWindow?.close();
+      setError(errorText(caught));
     } finally {
-      setSwitching(false);
+      setBusy(false);
+    }
+  };
+
+  const switchRole = async (role: UserRole) => {
+    if (busy || currentUser?.role === role) return;
+    setBusy(true);
+    try {
+      const session = await api.switchRole(role);
+      setCurrentUser(session.user);
+      setBriefing(null);
+      setError('');
+      clearInviteFromLocation();
+      setInviteToken(null);
+      notify(roleLabel(role));
+    } catch (caught) {
+      notify(errorText(caught));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const logout = async () => {
+    setBusy(true);
+    try {
+      await api.logout();
+      clearPendingLogin();
+      setCurrentUser(null);
+      setBriefing(null);
+      setLogin(null);
+      setError('');
+    } catch (caught) {
+      notify(errorText(caught));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -269,39 +243,188 @@ export function AppShell() {
     <div className="min-h-dvh bg-background text-foreground">
       <header className="topbar">
         <Brand />
-        {loadState === 'ready' && currentUser ? (
-          <div className="ml-auto flex items-center gap-3">
-            <UserSwitcher
-              user={currentUser}
-              users={users}
-              switching={switching}
-              onChange={(user) => void switchUser(user)}
-            />
-          </div>
+        {currentUser ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              disabled={busy}
+              className="ml-auto flex min-h-11 items-center gap-3 rounded-full px-3 text-left hover:bg-muted focus-visible:outline-2 focus-visible:outline-primary"
+            >
+              <span>
+                <span className="block max-w-48 truncate text-sm font-medium">
+                  {currentUser.name}
+                </span>
+                <span className="block text-sm text-muted-foreground">
+                  {roleLabel(currentUser.role)}
+                </span>
+              </span>
+              {busy ? (
+                <LoaderCircle className="size-4 animate-spin" />
+              ) : (
+                <ChevronDown className="size-4" />
+              )}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-64 p-2">
+              <DropdownMenuGroup>
+                <DropdownMenuLabel>
+                  {currentUser.telegramUsername
+                    ? `@${currentUser.telegramUsername}`
+                    : 'Мой аккаунт'}
+                </DropdownMenuLabel>
+                {(['hr', 'candidate'] as const).map((role) => (
+                  <DropdownMenuItem
+                    key={role}
+                    onClick={() => void switchRole(role)}
+                    className="min-h-11 cursor-pointer"
+                  >
+                    {roleLabel(role)}
+                    {role === currentUser.role && (
+                      <Check className="ml-auto size-4" />
+                    )}
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuItem
+                  className="min-h-11 cursor-pointer"
+                  onClick={() => void logout()}
+                >
+                  <LogOut className="size-4" /> Выйти
+                </DropdownMenuItem>
+              </DropdownMenuGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
         ) : null}
       </header>
-
-      {loadState === 'loading' ? <LoadingView label={loadMessage} /> : null}
-      {loadState === 'error' ? (
-        <ErrorView
-          message={errorMessage}
-          onRetry={() => setReloadKey((key) => key + 1)}
+      {loading ? (
+        <main
+          className="grid min-h-[70dvh] place-items-center"
+          aria-busy="true"
+        >
+          <p className="flex items-center gap-3">
+            <LoaderCircle className="size-5 animate-spin" /> Восстанавливаем
+            сессию…
+          </p>
+        </main>
+      ) : !currentUser ? (
+        <main className="grid min-h-[calc(100dvh-68px)] place-items-center px-5 py-12">
+          <section className="surface-card w-full max-w-md p-7 sm:p-10">
+            <span className="grid size-12 place-items-center rounded-2xl bg-primary/10 text-primary">
+              <Send className="size-6" />
+            </span>
+            <h1 className="mt-6 text-2xl font-semibold">
+              {inviteToken ? 'Войдите, чтобы пройти интервью' : 'Вход в Signal'}
+            </h1>
+            <p className="mt-3 text-base leading-relaxed text-muted-foreground">
+              {login
+                ? 'Нажмите «Старт» у бота и вернитесь сюда. Вход завершится автоматически.'
+                : 'Откройте нашего бота и нажмите «Старт». Один аккаунт для кабинетов HR и кандидата.'}
+            </p>
+            {login ? (
+              <>
+                <a
+                  href={login.botUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-6 flex min-h-11 items-center justify-center gap-2 rounded-md bg-primary px-4 py-3 font-medium text-primary-foreground"
+                >
+                  <Send className="size-4" /> Открыть бота
+                </a>
+                <p
+                  className="mt-4 flex items-center gap-2 text-sm text-muted-foreground"
+                  aria-live="polite"
+                >
+                  <LoaderCircle className="size-4 animate-spin" /> Ожидаем
+                  подтверждение в Telegram
+                </p>
+                <Button
+                  variant="ghost"
+                  className="mt-3"
+                  disabled={busy}
+                  onClick={() => void signIn()}
+                >
+                  Получить новую ссылку
+                </Button>
+              </>
+            ) : (
+              <Button
+                className="mt-6 w-full"
+                size="lg"
+                disabled={busy}
+                onClick={() => void signIn()}
+              >
+                {busy ? (
+                  <LoaderCircle className="size-4 animate-spin" />
+                ) : (
+                  <Send className="size-4" />
+                )}{' '}
+                Войти через Telegram
+              </Button>
+            )}
+            {error && (
+              <div className="mt-4 text-sm text-destructive" role="alert">
+                {error}
+                <Button
+                  variant="ghost"
+                  className="mt-2"
+                  onClick={() => setReload((value) => value + 1)}
+                >
+                  Повторить
+                </Button>
+              </div>
+            )}
+          </section>
+        </main>
+      ) : error ? (
+        <main className="mx-auto max-w-lg px-5 py-20">
+          <h1 className="text-2xl font-semibold">
+            Не удалось открыть интервью
+          </h1>
+          <p className="mt-4 text-base text-destructive" role="alert">
+            {error}
+          </p>
+          <div className="mt-6 flex flex-wrap gap-3">
+            <Button
+              variant="outline"
+              onClick={() => {
+                clearInviteFromLocation();
+                setInviteToken(null);
+                setError('');
+              }}
+            >
+              В кабинет
+            </Button>
+            <Button onClick={() => setReload((value) => value + 1)}>
+              Повторить
+            </Button>
+            <Button
+              variant="outline"
+              disabled={busy}
+              onClick={() => void logout()}
+            >
+              Войти в другой аккаунт
+            </Button>
+          </div>
+        </main>
+      ) : currentUser.role === 'hr' ? (
+        <HrApp key={currentUser.id} notify={notify} />
+      ) : currentUser.candidateId ? (
+        <CandidateApp
+          key={`${currentUser.id}:${currentUser.candidateId}`}
+          candidateId={currentUser.candidateId}
+          candidateName={currentUser.name}
+          initialBriefing={briefing}
+          notify={notify}
         />
-      ) : null}
-      {loadState === 'ready' && currentUser ? (
-        currentUser.role === 'hr' ? (
-          <HrApp key={currentUser.id} notify={notify} />
-        ) : (
-          <CandidateApp
-            key={currentUser.id}
-            candidateId={currentUser.candidateId}
-            candidateName={currentUser.name}
-            initialBriefing={briefing}
-            notify={notify}
-          />
-        )
-      ) : null}
-
+      ) : (
+        <main className="mx-auto max-w-xl px-5 py-20">
+          <h1 className="text-2xl font-semibold">Кабинет кандидата</h1>
+          <p className="mt-4 text-base text-muted-foreground">
+            Пока нет приглашений на интервью. Перейдите по ссылке от рекрутера —
+            интервью появится здесь.
+          </p>
+          <p className="mt-3 text-base text-muted-foreground">
+            Уведомления будут приходить в Telegram.
+          </p>
+        </main>
+      )}
       <div
         className={`app-notice ${notice ? 'app-notice-visible' : ''}`}
         aria-live="polite"

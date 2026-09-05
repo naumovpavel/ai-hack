@@ -34,6 +34,8 @@ from interview_api.workflow.openrouter import OpenRouterWorkflowAI
 from interview_api.workflow.repository import SqlAlchemyWorkflowRepository
 from interview_api.workflow.service import WorkflowService
 from interview_api.workflow.storage import S3ObjectStorage
+from interview_api.workflow.telegram_routes import router as telegram_router
+from interview_api.workflow.telegram_runtime import TelegramRuntime
 from interview_api.workflow.transcription import WorkflowTranscriptionProvider
 
 logger = logging.getLogger(__name__)
@@ -199,6 +201,19 @@ def create_app(
             max_audio_bytes=resolved_settings.max_audio_bytes,
         )
 
+    if workflow_service is not None:
+        workflow_service.allow_demo_auth = (
+            resolved_settings.demo_auth_enabled
+            and resolved_settings.app_env != "production"
+            and not resolved_settings.telegram_bot_token
+        )
+
+    telegram_runtime = (
+        TelegramRuntime(workflow_service, resolved_settings)
+        if workflow_service is not None and resolved_settings.telegram_bot_token
+        else None
+    )
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         nonlocal managed_transcription_provider
@@ -207,6 +222,8 @@ def create_app(
                 if workflow_engine is not None:
                     await workflow_service.repository.initialize(workflow_engine)
                 await workflow_service.initialize()
+                if telegram_runtime is not None:
+                    await telegram_runtime.start()
             if (
                 _app.state.transcription_service is None
                 and workflow_service is None
@@ -232,6 +249,8 @@ def create_app(
                     logger.exception("Failed to initialize the transcription provider")
             yield
         finally:
+            if telegram_runtime is not None:
+                await telegram_runtime.stop()
             if managed_transcription_provider is not None:
                 managed_transcription_provider.close()
             if managed_openrouter_client is not None:
@@ -271,6 +290,7 @@ def create_app(
     app.include_router(questions_router)
     app.include_router(transcriptions_router)
     app.include_router(workflow_router)
+    app.include_router(telegram_router)
     return app
 
 

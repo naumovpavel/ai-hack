@@ -10,7 +10,7 @@
 __pycache__/
 *.py[cod]
 *.pyd
-.venv/
+.venv
 venv/
 .pytest_cache/
 .ruff_cache/
@@ -20,7 +20,7 @@ htmlcov/
 .pytest-case-*/
 
 # Node / frontend
-node_modules/
+node_modules
 .pnpm-store/
 .next/
 .vinext/

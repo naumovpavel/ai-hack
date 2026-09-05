@@ -30,13 +30,15 @@ from interview_api.workflow.errors import (
     WorkflowNotFoundError,
     WorkflowValidationError,
 )
+from interview_api.workflow.telegram_entities import TelegramAccountRow
+from interview_api.workflow.telegram_repository import TelegramRepositoryMixin
 
 
 def new_id() -> str:
     return str(uuid4())
 
 
-class SqlAlchemyWorkflowRepository:
+class SqlAlchemyWorkflowRepository(TelegramRepositoryMixin):
     """Async repository shared by PostgreSQL production and SQLite API tests."""
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
@@ -53,6 +55,10 @@ class SqlAlchemyWorkflowRepository:
             for table, column, declaration in (
                 ("workflow_positions", "role", "VARCHAR(240) NOT NULL DEFAULT ''"),
                 ("workflow_candidates", "interview_plan_id", "VARCHAR(36) NULL"),
+                ("workflow_candidates", "user_id", "VARCHAR(36) NULL"),
+                ("workflow_candidates", "telegram_username", "VARCHAR(32) NULL"),
+                ("workflow_auth_sessions", "active_role", "VARCHAR(16) NULL"),
+                ("workflow_auth_sessions", "candidate_id", "VARCHAR(36) NULL"),
             ):
                 columns = await connection.run_sync(
                     lambda conn, table=table: {
@@ -62,6 +68,16 @@ class SqlAlchemyWorkflowRepository:
                 if column not in columns:
                     await connection.execute(
                         text(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
+                    )
+
+            # create_all skips indexes on an existing table; add indexes for
+            # migrated Telegram contact/ownership columns after adding them.
+            for index in CandidateRow.__table__.indexes:
+                if index.name in {
+                    "ix_workflow_candidates_user_id", "ix_workflow_candidates_telegram_username"
+                }:
+                    await connection.run_sync(
+                        lambda conn, index=index: index.create(conn, checkfirst=True)
                     )
 
     async def ensure_demo_users(self) -> None:
@@ -125,11 +141,24 @@ class SqlAlchemyWorkflowRepository:
 
     async def resolve_auth_session(self, token_hash: str, now: datetime) -> UserRow | None:
         async with self._sessions() as session:
-            return await session.scalar(
-                select(UserRow)
+            result = (await session.execute(
+                select(UserRow, AuthSessionRow)
                 .join(AuthSessionRow, AuthSessionRow.user_id == UserRow.id)
                 .where(AuthSessionRow.token_hash == token_hash, AuthSessionRow.expires_at > now)
+            )).first()
+            if result is None:
+                return None
+            user, auth = result
+            account = await session.scalar(
+                select(TelegramAccountRow).where(TelegramAccountRow.user_id == user.id)
             )
+            session.expunge(user)
+            if auth.active_role:
+                user.role = auth.active_role
+                user.candidate_id = auth.candidate_id
+            user.telegram_username = account.username if account else None
+            user.telegram_connected = bool(account)
+            return user
 
     async def create_position(
         self,
@@ -211,8 +240,10 @@ class SqlAlchemyWorkflowRepository:
         resume_content_type: str,
         resume_text: str,
         interview_plan_id: str | None = None,
+        telegram_username: str | None = None,
     ) -> CandidateRow:
         candidate = CandidateRow(
+            telegram_username=telegram_username,
             id=new_id(),
             position_id=position_id,
             interview_plan_id=interview_plan_id,

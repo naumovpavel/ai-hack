@@ -18,6 +18,12 @@ class Settings(BaseSettings):
     app_name: str = "AI Interview Backend"
     app_env: Literal["local", "test", "production"] = "local"
 
+    demo_auth_enabled: bool = False
+    telegram_bot_token: SecretStr | None = None
+    telegram_bot_username: str = ""
+    telegram_update_mode: Literal["polling", "webhook", "disabled"] = "polling"
+    telegram_webhook_secret: SecretStr | None = None
+
     # Persistent workflow. Docker Compose overrides the SQLite developer
     # default with PostgreSQL and points object storage at local MinIO.
     database_url: str = "sqlite+aiosqlite:///./signal.db"

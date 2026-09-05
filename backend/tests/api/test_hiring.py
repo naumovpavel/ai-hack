@@ -33,7 +33,7 @@ def hiring_client() -> Iterator[tuple[TestClient, WorkflowService]]:
         clock=lambda: datetime(2026, 9, 5, tzinfo=UTC),
     )
     app = create_app(
-        settings=Settings(app_env="test", _env_file=None),
+        settings=Settings(app_env="test", demo_auth_enabled=True, _env_file=None),
         workflow_service=service,
         workflow_engine=engine,
     )
@@ -46,6 +46,28 @@ def hiring_client() -> Iterator[tuple[TestClient, WorkflowService]]:
 def assert_ok(response):
     assert response.status_code == 200, response.text
     return response.json()
+
+
+def sign_in_telegram(client: TestClient, service: WorkflowService) -> None:
+    """Authenticate the candidate offline before accepting the invitation."""
+
+    async def sign_in() -> str:
+        account = await service.repository.register_telegram_account(
+            telegram_id=1001,
+            chat_id=1001,
+            username="candidate_1001",
+            first_name="Иван",
+            last_name="Петров",
+            now=service._now(),
+        )
+        actor = await service.repository.get_user(account.user_id)
+        raw_token, _session = await service.session_for_telegram_actor(actor, role="candidate")
+        return raw_token
+
+    raw_token = asyncio.run(sign_in())
+    client.cookies.clear()
+    client.cookies.set(service.cookie_name, raw_token)
+    assert client.get("/api/v1/session").status_code == 200
 
 
 def make_plan(client: TestClient, personalized: int = 2, minutes: int = 17):
@@ -105,7 +127,7 @@ def candidate_draft(client: TestClient, plan: dict):
 
 
 def test_complete_hierarchy_preserves_pool_settings_and_idempotent_candidate(hiring_client):
-    client, _service = hiring_client
+    client, service = hiring_client
     vacancy, plan = make_plan(client)
     assert "questions" not in vacancy
     assert vacancy["interviews"] == []
@@ -132,6 +154,7 @@ def test_complete_hierarchy_preserves_pool_settings_and_idempotent_candidate(hir
     assert assert_ok(client.get("/api/v1/candidates", params={"search": "none"})) == []
     listing = assert_ok(client.get("/api/v1/vacancies"))
     assert listing[0]["candidateCount"] == 1 and listing[0]["interviewCount"] == 1
+    sign_in_telegram(client, service)
     briefing = assert_ok(
         client.post("/api/v1/invites/resolve", json={"token": repeat["inviteToken"]})
     )
@@ -412,3 +435,22 @@ def test_legacy_hierarchy_backfill_keeps_candidates_and_settings(hiring_client):
     assert plan["maxFollowUpQuestions"] == 1
     assert plan["candidates"][0]["id"] == candidate["id"]
     assert len(assert_ok(client.get(f"/api/v1/candidates/{candidate['id']}"))["questions"]) == 2
+
+
+def test_resume_telegram_contact_is_parsed_and_saved(hiring_client):
+    client, _service = hiring_client
+    _vacancy, plan = make_plan(client)
+    draft = assert_ok(client.post(
+        f"/api/v1/interview-plans/{plan['id']}/candidates/prepare",
+        files={"resume": ("resume.txt", "Иван Петров\nTelegram: @Candidate_Tg\nPython".encode(),
+                          "text/plain")},
+    ))
+    assert draft["telegramUsername"] == "candidate_tg"
+    draft["telegramUsername"] = "@Corrected_Tg"
+    approval = assert_ok(client.post(
+        f"/api/v1/interview-plans/{plan['id']}/candidates", json=draft,
+    ))
+    saved = assert_ok(client.get(f"/api/v1/candidates/{approval['candidateId']}"))
+    assert saved["telegramUsername"] == "corrected_tg"
+    listing = assert_ok(client.get("/api/v1/candidates"))
+    assert listing[0]["telegramUsername"] == "corrected_tg"
