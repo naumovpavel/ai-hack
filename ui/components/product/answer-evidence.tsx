@@ -1,16 +1,8 @@
 'use client';
 
-import { useRef, useState } from 'react';
-import { Play, RotateCcw, Sparkles } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+import { useState } from 'react';
+import { Play, Sparkles } from 'lucide-react';
+import { EvidencePlayer } from './evidence-player';
 import type {
   AnalysisItem,
   AnalysisEvidence,
@@ -24,21 +16,6 @@ type EvidenceClip = {
   endSeconds: number;
   asset: MediaAsset;
 };
-
-function vttTime(seconds: number) {
-  const milliseconds = Math.max(0, Math.round(seconds * 1000));
-  const hours = Math.floor(milliseconds / 3_600_000);
-  const minutes = Math.floor((milliseconds % 3_600_000) / 60_000);
-  const remainderSeconds = Math.floor((milliseconds % 60_000) / 1000);
-  const remainderMilliseconds = milliseconds % 1000;
-  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(remainderSeconds).padStart(2, '0')}.${String(remainderMilliseconds).padStart(3, '0')}`;
-}
-
-function clipCaptions(clip: EvidenceClip) {
-  return `data:text/vtt;charset=utf-8,${encodeURIComponent(
-    `WEBVTT\n\n${vttTime(clip.startSeconds)} --> ${vttTime(clip.endSeconds)}\n${clip.quote}\n`,
-  )}`;
-}
 
 function EvidenceAnswer({
   answerText,
@@ -142,7 +119,6 @@ function EvidenceAnswer({
 export function AnswerEvidence({
   items,
   media,
-  notify,
   answer,
 }: {
   items: AnalysisItem[];
@@ -151,12 +127,6 @@ export function AnswerEvidence({
   answer?: { questionId: string; answerText: string | null };
 }) {
   const [evidenceClip, setEvidenceClip] = useState<EvidenceClip | null>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const playEvidenceClip = () => {
-    if (!evidenceClip || !videoRef.current) return;
-    videoRef.current.currentTime = evidenceClip.startSeconds;
-    void videoRef.current.play().catch(() => undefined);
-  };
   return (
     <div className={answer ? 'space-y-4' : 'mt-4 divide-y'}>
       {answer ? (
@@ -236,71 +206,42 @@ export function AnswerEvidence({
           )}
         </div>
       ))}
-      <Dialog
-        open={evidenceClip !== null}
-        onOpenChange={(open) => {
-          if (!open) {
-            videoRef.current?.pause();
-            setEvidenceClip(null);
-          }
-        }}
-      >
-        <DialogContent className="max-w-3xl">
-          <DialogHeader>
-            <DialogTitle>Фрагмент ответа кандидата</DialogTitle>
-            <DialogDescription>
-              {evidenceClip?.quote || 'Выделенный фрагмент ответа'}
-            </DialogDescription>
-          </DialogHeader>
-          {evidenceClip?.asset.playbackUrl ? (
-            <video
-              ref={videoRef}
-              className="max-h-[65vh] w-full rounded-xl bg-black"
-              controls
-              preload="metadata"
-              src={evidenceClip.asset.playbackUrl}
-              onLoadedMetadata={playEvidenceClip}
-              onTimeUpdate={(event) => {
-                if (
-                  evidenceClip &&
-                  event.currentTarget.currentTime >= evidenceClip.endSeconds
-                ) {
-                  event.currentTarget.pause();
-                  event.currentTarget.currentTime = evidenceClip.endSeconds;
-                }
-              }}
-              onPlay={(event) => {
-                if (
-                  evidenceClip &&
-                  (event.currentTarget.currentTime <
-                    evidenceClip.startSeconds ||
-                    event.currentTarget.currentTime >= evidenceClip.endSeconds)
-                ) {
-                  event.currentTarget.currentTime = evidenceClip.startSeconds;
-                }
-              }}
-              onError={() => notify('Не удалось загрузить видеофрагмент')}
-            >
-              <track
-                default
-                kind="captions"
-                src={clipCaptions(evidenceClip)}
-                srcLang="ru"
-                label="Расшифровка ответа"
-              />
-            </video>
-          ) : null}
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={playEvidenceClip}>
-              <RotateCcw data-icon="inline-start" />
-              Повторить фрагмент
-            </Button>
-            <Button type="button" onClick={() => setEvidenceClip(null)}>
-              Закрыть
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {evidenceClip?.asset.playbackUrl ? (
+        <EvidencePlayer
+          key={`${evidenceClip.asset.id}:${evidenceClip.startSeconds}`}
+          onClose={() => setEvidenceClip(null)}
+          inferSingleStreamDuration
+          playback={{
+            findingId: evidenceClip.asset.id,
+            title: 'Фрагмент ответа кандидата',
+            episode: {
+              startMs: evidenceClip.startSeconds * 1000,
+              endMs: evidenceClip.endSeconds * 1000,
+            },
+            context: {
+              startMs: 0,
+              endMs: (evidenceClip.endSeconds + 5) * 1000,
+            },
+            answerRange: {
+              startMs: 0,
+              endMs: (evidenceClip.endSeconds + 5) * 1000,
+            },
+            camera: [
+              {
+                mediaId: evidenceClip.asset.id,
+                streamId: evidenceClip.asset.id,
+                url: evidenceClip.asset.playbackUrl,
+                startMs: 0,
+                endMs: (evidenceClip.endSeconds + 5) * 1000,
+                mediaOffsetMs: 0,
+              },
+            ],
+            screen: [],
+            transcript: [{ text: evidenceClip.quote, words: [] }],
+            observations: [],
+          }}
+        />
+      ) : null}
     </div>
   );
 }

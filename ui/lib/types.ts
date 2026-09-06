@@ -211,6 +211,8 @@ export type InterviewBriefing = {
   currentQuestion: PublicQuestion | null;
   recordsAudio: boolean;
   recordsVideo: boolean;
+  integrityEnabled?: boolean;
+  integrityBlocked?: boolean;
   allowsFollowUps: boolean;
   evaluationNotice: string;
   humanReviewNotice: string;
@@ -234,6 +236,8 @@ export type PracticeSet = {
 
 export type InterviewState = {
   interviewId: string;
+  integrityEnabled?: boolean;
+  integrityBlocked?: boolean;
   status: string;
   startedAt: string | null;
   deadlineAt: string | null;
@@ -244,6 +248,7 @@ export type InterviewState = {
 
 export type AnswerResult = {
   answerId: string;
+  integrityBlocked?: boolean;
   transcript: string;
   nextQuestion: PublicQuestion | null;
   followUpAdded: boolean;

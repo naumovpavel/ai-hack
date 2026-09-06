@@ -70,3 +70,6 @@ lerna-debug.log*
 ._*
 Thumbs.db
 Desktop.ini
+
+# MediaPipe runtime copied from the pinned npm package before dev/build.
+/public/integrity/runtime/

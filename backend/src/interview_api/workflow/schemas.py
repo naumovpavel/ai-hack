@@ -139,6 +139,8 @@ class PublicQuestion(ApiModel):
 
 
 class InterviewBriefingResponse(ApiModel):
+    integrity_enabled: bool = False
+    integrity_blocked: bool = False
     interview_id: str
     candidate_id: str
     candidate_name: str
@@ -209,6 +211,8 @@ class StartInterviewRequest(ApiModel):
 
 
 class InterviewStateResponse(ApiModel):
+    integrity_enabled: bool = False
+    integrity_blocked: bool = False
     interview_id: str
     status: str
     started_at: datetime | None
@@ -219,6 +223,8 @@ class InterviewStateResponse(ApiModel):
 
 
 class AnswerResponse(ApiModel):
+    integrity_enabled: bool = False
+    integrity_blocked: bool = False
     answer_id: str
     transcript: str
     next_question: PublicQuestion | None

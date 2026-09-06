@@ -46,6 +46,7 @@ class SqlAlchemyWorkflowRepository(TelegramRepositoryMixin, DeletionRepositoryMi
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = session_factory
+        self.integrity_enabled_for_new_interviews = False
 
     @staticmethod
     async def _lock_candidate(session: AsyncSession, candidate_id: str) -> CandidateRow:
@@ -72,6 +73,7 @@ class SqlAlchemyWorkflowRepository(TelegramRepositoryMixin, DeletionRepositoryMi
             await connection.run_sync(WorkflowBase.metadata.create_all)
             # Additive migration keeps existing local SQLite and PostgreSQL data intact.
             for table, column, declaration in (
+                ("workflow_interviews", "integrity_enabled", "BOOLEAN NOT NULL DEFAULT false"),
                 ("workflow_positions", "role", "VARCHAR(240) NOT NULL DEFAULT ''"),
                 ("workflow_candidates", "interview_plan_id", "VARCHAR(36) NULL"),
                 ("workflow_candidates", "user_id", "VARCHAR(36) NULL"),
@@ -446,7 +448,10 @@ class SqlAlchemyWorkflowRepository(TelegramRepositoryMixin, DeletionRepositoryMi
                 .with_for_update()
             )
             if interview is None:
-                interview = InterviewRow(id=new_id(), candidate_id=candidate_id, status="ready")
+                interview = InterviewRow(
+                    id=new_id(), candidate_id=candidate_id, status="ready",
+                    integrity_enabled=self.integrity_enabled_for_new_interviews,
+                )
                 session.add(interview)
             candidate = await session.get(CandidateRow, candidate_id)
             if candidate is None:

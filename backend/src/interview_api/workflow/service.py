@@ -120,6 +120,7 @@ class WorkflowService(PracticeWorkflowMixin, TelegramAuthMixin, HiringWorkflowMi
         self.telegram_webhook_secret = None
         self.telegram_notifier = None
         self.allow_demo_auth = False
+        self.integrity = None
 
     async def initialize(self) -> None:
         await self.storage.ensure_bucket()
@@ -461,7 +462,7 @@ class WorkflowService(PracticeWorkflowMixin, TelegramAuthMixin, HiringWorkflowMi
             )
             remaining_seconds = self._remaining_seconds(interview, self._now())
             next_question = (
-                await self.repository.next_unanswered_question(interview.id)
+                await self._active_current_question(interview)
                 if remaining_seconds > 0
                 else None
             )
@@ -471,6 +472,8 @@ class WorkflowService(PracticeWorkflowMixin, TelegramAuthMixin, HiringWorkflowMi
                 next_question=self._public_question(next_question),
                 follow_up_added=False,
                 remaining_seconds=remaining_seconds,
+                integrity_enabled=interview.integrity_enabled,
+                integrity_blocked=await self._integrity_blocked(interview),
             )
         now = self._now()
         remaining_seconds = self._remaining_seconds(interview, now)
@@ -489,6 +492,9 @@ class WorkflowService(PracticeWorkflowMixin, TelegramAuthMixin, HiringWorkflowMi
                 "Answers must be submitted in interview order.",
                 details={"expectedQuestionId": current.id},
             )
+        if (interview.integrity_enabled and (self.integrity is None
+                or not await self.integrity.issue_question(interview, current.id))):
+            raise WorkflowConflictError("Восстановите запись перед следующим вопросом.")
         transcription = await self.ai.transcribe(
             audio_data, content_type=audio_content_type, language=language
         )
@@ -598,7 +604,7 @@ class WorkflowService(PracticeWorkflowMixin, TelegramAuthMixin, HiringWorkflowMi
                 follow_up_added = False
         remaining_seconds = self._remaining_seconds(interview, self._now())
         next_question = (
-            await self.repository.next_unanswered_question(interview.id)
+            await self._active_current_question(interview)
             if remaining_seconds > 0
             else None
         )
@@ -608,6 +614,8 @@ class WorkflowService(PracticeWorkflowMixin, TelegramAuthMixin, HiringWorkflowMi
             next_question=self._public_question(next_question),
             follow_up_added=follow_up_added,
             remaining_seconds=remaining_seconds,
+            integrity_enabled=interview.integrity_enabled,
+            integrity_blocked=await self._integrity_blocked(interview),
         )
 
     async def question_speech(
@@ -921,6 +929,8 @@ class WorkflowService(PracticeWorkflowMixin, TelegramAuthMixin, HiringWorkflowMi
             status=interview.status,
             current_question=self._public_question(current),
             allows_follow_ups=position.max_follow_up_questions > 0,
+            integrity_enabled=interview.integrity_enabled,
+            integrity_blocked=await self._integrity_blocked(interview),
         )
 
     @classmethod
@@ -1009,14 +1019,34 @@ class WorkflowService(PracticeWorkflowMixin, TelegramAuthMixin, HiringWorkflowMi
             remaining_seconds=self._remaining_seconds(interview, self._now()),
             current_question=self._public_question(current),
             answered_question_ids=await self.repository.list_answered_question_ids(interview.id),
+            integrity_enabled=interview.integrity_enabled,
+            integrity_blocked=await self._integrity_blocked(interview),
         )
+
+    async def _integrity_blocked(self, interview: InterviewRow) -> bool:
+        if not interview.integrity_enabled:
+            return False
+        if interview.status not in {"ready", "in_progress"}:
+            return False
+        if interview.status == "in_progress" and (
+            self._remaining_seconds(interview, self._now()) <= 0
+            or await self.repository.next_unanswered_question(interview.id) is None
+        ):
+            # Capture failures gate issuing the next question, never finishing a
+            # saved last answer or an interview whose allotted time has elapsed.
+            return False
+        return self.integrity is None or await self.integrity.is_blocked(interview.id)
 
     async def _active_current_question(self, interview: InterviewRow) -> QuestionRow | None:
         if interview.status != "in_progress":
             return None
         if self._remaining_seconds(interview, self._now()) <= 0:
             return None
-        return await self.repository.next_unanswered_question(interview.id)
+        question = await self.repository.next_unanswered_question(interview.id)
+        if (question and interview.integrity_enabled and (self.integrity is None
+                or not await self.integrity.issue_question(interview, question.id))):
+            return None
+        return question
 
     async def _analysis_response(self, analysis: AnalysisRow, user_id: str) -> AnalysisResponse:
         review = await self.repository.get_human_review(analysis.id, user_id)

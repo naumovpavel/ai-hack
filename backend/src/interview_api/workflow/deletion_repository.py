@@ -24,6 +24,15 @@ from interview_api.workflow.entities import (
 )
 from interview_api.workflow.errors import WorkflowNotFoundError
 from interview_api.workflow.hiring_templates import template_id
+from interview_api.workflow.integrity_entities import (
+    IntegrityChunkRow,
+    IntegrityEventRow,
+    IntegrityFindingRow,
+    IntegrityJobRow,
+    IntegrityMediaRow,
+    IntegrityReviewRow,
+    IntegritySessionRow,
+)
 from interview_api.workflow.practice_entities import PracticeSessionRow
 from interview_api.workflow.telegram_notification_entities import TelegramNotificationRow
 
@@ -105,6 +114,15 @@ class DeletionRepositoryMixin:
                 AnalysisItemRow.analysis_id.in_(analysis_ids)
             )
             # Answers restrict deletion of their question, so delete them first.
+            finding_ids = select(IntegrityFindingRow.id).where(
+                IntegrityFindingRow.interview_id.in_(interview_ids)
+            )
+            await session.execute(delete(IntegrityReviewRow).where(
+                IntegrityReviewRow.finding_id.in_(finding_ids)
+            ))
+            for table in (IntegrityFindingRow, IntegrityEventRow, IntegrityMediaRow,
+                          IntegrityChunkRow, IntegrityJobRow, IntegritySessionRow):
+                await session.execute(delete(table).where(table.interview_id.in_(interview_ids)))
             for table, predicate in (
                 (ReviewProgressRow, ReviewProgressRow.analysis_item_id.in_(item_ids)),
                 (HumanReviewRow, HumanReviewRow.analysis_id.in_(analysis_ids)),

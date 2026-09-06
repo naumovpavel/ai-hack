@@ -22,6 +22,7 @@ import {
   LockKeyhole,
   Mic,
   Mic2,
+  Monitor,
   RotateCcw,
   ShieldCheck,
   Volume2,
@@ -32,6 +33,11 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { api, ApiError } from '@/lib/api';
+import {
+  requestIntegrityScreen,
+  useIntegrityCapture,
+  type IntegrityCapture,
+} from '@/hooks/use-integrity-capture';
 import {
   mediaAccessError,
   mediaAccessSupportError,
@@ -343,7 +349,9 @@ function Preparation({
           <p className="mt-4 max-w-2xl text-[15px] leading-relaxed text-muted-foreground">
             Интервью займёт до {briefing.durationMinutes} минут и содержит{' '}
             {briefing.questionCount} основных вопросов. Отвечайте голосом;
-            камера и микрофон будут записываться.
+            {briefing.integrityEnabled
+              ? 'камера, микрофон и весь выбранный экран записываются непрерывно, включая паузы между ответами.'
+              : 'камера и микрофон будут записываться.'}
           </p>
 
           <section
@@ -508,7 +516,9 @@ function Preparation({
             <ul className="mt-5 space-y-3 text-xs leading-relaxed text-muted-foreground">
               <li className="flex gap-2">
                 <Check className="mt-0.5 size-4 text-emerald-600" />
-                Записываются видео и звук.
+                {briefing.integrityEnabled
+                  ? 'Непрерывно записываются камера, звук и весь выбранный экран. Материалы контроля хранятся 30 дней.'
+                  : 'Записываются видео и звук.'}
               </li>
               <li className="flex gap-2">
                 <Check className="mt-0.5 size-4 text-emerald-600" />
@@ -516,9 +526,9 @@ function Preparation({
               </li>
               <li className="flex gap-2">
                 <Check className="mt-0.5 size-4 text-emerald-600" />
-                Аудио и текстовый контекст обрабатываются моделями через
-                OpenRouter согласно настроенной политике хранения; видео
-                остаётся в локальном хранилище компании.
+                {briefing.integrityEnabled
+                  ? 'Запись, расшифровка и технические события обрабатываются после интервью через OpenRouter. Локальные сигналы положения лица служат только поводом для просмотра человеком.'
+                  : 'Аудио и текстовый контекст обрабатываются моделями через OpenRouter согласно настроенной политике хранения; видео остаётся в локальном хранилище компании.'}
               </li>
               <li className="flex gap-2">
                 <Check className="mt-0.5 size-4 text-emerald-600" />
@@ -552,12 +562,16 @@ function Preflight({
   onBack,
   onReady,
   practice = false,
+  integrityEnabled = false,
 }: {
   onBack: () => void;
-  onReady: (stream: MediaStream) => void | Promise<void>;
+  onReady: (stream: MediaStream, screen?: MediaStream) => void | Promise<void>;
   practice?: boolean;
+  integrityEnabled?: boolean;
 }) {
   const [stream, setStream] = useState<MediaStream | null>(null);
+  const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
+  const [requestingScreen, setRequestingScreen] = useState(false);
   const [status, setStatus] = useState<
     'idle' | 'requesting' | 'granted' | 'denied'
   >('idle');
@@ -594,6 +608,20 @@ function Preflight({
     },
     [stream],
   );
+  useEffect(() => {
+    const ended = () => {
+      setScreenStream(null);
+      setError(
+        'Демонстрация экрана остановлена. Подключите весь экран ещё раз.',
+      );
+    };
+    screenStream?.getVideoTracks()[0]?.addEventListener('ended', ended);
+    return () => {
+      screenStream?.getVideoTracks()[0]?.removeEventListener('ended', ended);
+      if (!handedOffRef.current)
+        screenStream?.getTracks().forEach((track) => track.stop());
+    };
+  }, [screenStream]);
 
   const requestAccess = async () => {
     const requestId = ++requestRef.current;
@@ -631,11 +659,17 @@ function Preflight({
       <BackButton onClick={onBack} label="К подготовке" disabled={starting} />
       <div className="text-center">
         <p className="eyebrow">Проверка устройств</p>
-        <h1 className="page-title">Камера и микрофон</h1>
+        <h1 className="page-title">
+          {integrityEnabled
+            ? 'Камера, микрофон и весь экран'
+            : 'Камера и микрофон'}
+        </h1>
         <p className="mx-auto mt-3 max-w-xl text-sm text-muted-foreground">
           {practice
             ? 'Записи тренировки сохранятся на сервере для транскрипта и личного разбора. Аудио и текст обрабатываются моделями через OpenRouter; видео хранится у сервиса. Рекрутер не увидит тренировочные ответы и анализ.'
-            : 'Разрешите доступ в системном окне браузера. Запись начнётся только после кнопки «Начать интервью».'}
+            : integrityEnabled
+              ? 'Разрешите камеру и микрофон, затем выберите «Весь экран». После начала интервью запись идёт непрерывно, в том числе между ответами. Видеоматериалы контроля хранятся 30 дней.'
+              : 'Разрешите доступ в системном окне браузера. Запись начнётся только после кнопки «Начать интервью».'}
         </p>
       </div>
       <div className="preflight-grid mt-7">
@@ -676,6 +710,15 @@ function Preflight({
               </span>
               <span>{status === 'granted' ? 'Готов' : 'Нужен доступ'}</span>
             </div>
+            {integrityEnabled ? (
+              <div className="device-check-row">
+                <span>
+                  <Monitor />
+                  Весь экран
+                </span>
+                <span>{screenStream ? 'Готов' : 'Нужен доступ'}</span>
+              </div>
+            ) : null}
           </div>
           {error ? (
             <p className="permission-error" role="alert">
@@ -696,30 +739,62 @@ function Preflight({
             </label>
           ) : null}
           {status === 'granted' ? (
-            <Button
-              className="mt-5 h-12 w-full"
-              disabled={starting || (practice && !consent)}
-              onClick={async () => {
-                if (!stream) return;
-                setStarting(true);
-                try {
-                  handedOffRef.current = true;
-                  await onReady(stream);
-                } catch (caught) {
-                  handedOffRef.current = false;
-                  setError(errorText(caught));
-                } finally {
-                  if (mountedRef.current) setStarting(false);
+            <>
+              {integrityEnabled && !screenStream ? (
+                <Button
+                  className="mt-5 w-full"
+                  variant="outline"
+                  disabled={requestingScreen}
+                  onClick={async () => {
+                    setRequestingScreen(true);
+                    setError('');
+                    try {
+                      const display = await requestIntegrityScreen();
+                      if (!mountedRef.current)
+                        display.getTracks().forEach((track) => track.stop());
+                      else setScreenStream(display);
+                    } catch (caught) {
+                      if (mountedRef.current) setError(errorText(caught));
+                    } finally {
+                      if (mountedRef.current) setRequestingScreen(false);
+                    }
+                  }}
+                >
+                  <Monitor data-icon="inline-start" />
+                  {requestingScreen
+                    ? 'Выберите весь экран…'
+                    : 'Поделиться всем экраном'}
+                </Button>
+              ) : null}
+              <Button
+                className="mt-5 h-12 w-full"
+                disabled={
+                  starting ||
+                  (practice && !consent) ||
+                  (integrityEnabled && !screenStream)
                 }
-              }}
-            >
-              {starting
-                ? 'Начинаем…'
-                : practice
-                  ? 'Начать тренировку'
-                  : 'Начать интервью'}
-              <ArrowRight data-icon="inline-end" />
-            </Button>
+                onClick={async () => {
+                  if (!stream) return;
+                  setStarting(true);
+                  try {
+                    handedOffRef.current = true;
+                    await onReady(stream, screenStream || undefined);
+                  } catch (caught) {
+                    handedOffRef.current = false;
+                    setError(errorText(caught));
+                  } finally {
+                    if (mountedRef.current) setStarting(false);
+                  }
+                }}
+              >
+                {starting
+                  ? 'Начинаем…'
+                  : practice
+                    ? 'Начать тренировку'
+                    : 'Начать интервью'}
+                <ArrowRight data-icon="inline-end" />
+              </Button>
+            </>
           ) : (
             <Button
               className="mt-5 h-12 w-full"
@@ -1055,6 +1130,95 @@ function PracticeRoom({
   );
 }
 
+function IntegrityCaptureNotice({
+  integrity,
+  waiting,
+  restoring,
+  onRestore,
+  allowHeuristicRetry,
+}: {
+  integrity: IntegrityCapture;
+  waiting: boolean;
+  restoring: boolean;
+  onRestore: () => void;
+  allowHeuristicRetry: boolean;
+}) {
+  if (!integrity.enabled) return null;
+  return (
+    <section
+      className="mx-auto my-4 max-w-3xl rounded-xl border bg-muted/40 p-4 text-sm"
+      aria-live="polite"
+    >
+      {integrity.blocked || waiting ? (
+        <>
+          <p className="font-medium">Нужно восстановить запись</p>
+          <p className="mt-1 text-muted-foreground">
+            Текущий ответ сохраняется. Следующий вопрос появится после
+            восстановления камеры, микрофона и всего экрана. Технический сбой не
+            считается нарушением.
+          </p>
+          <Button className="mt-3" onClick={onRestore} disabled={restoring}>
+            <Monitor data-icon="inline-start" />
+            {restoring
+              ? 'Восстанавливаем…'
+              : 'Восстановить запись и продолжить'}
+          </Button>
+        </>
+      ) : (
+        <p className="flex items-center gap-2">
+          <ShieldCheck className="size-4 text-primary" />
+          Камера, микрофон и весь экран записываются непрерывно.
+        </p>
+      )}
+      {integrity.face.status === 'loading' ? (
+        <p className="mt-2 text-muted-foreground">
+          Готовим локальную калибровку камеры…
+        </p>
+      ) : null}
+      {['ready', 'calibrating'].includes(integrity.face.status) ? (
+        <div className="mt-3">
+          <p>
+            Смотрите на область с вопросом, слегка переводя взгляд по тексту.
+            Калибровка займёт около 5 секунд. Эти сигналы не определяют
+            нарушение.
+          </p>
+          {integrity.face.status === 'ready' ? (
+            <Button
+              className="mt-2"
+              variant="outline"
+              onClick={integrity.face.calibrate}
+            >
+              Начать калибровку
+            </Button>
+          ) : (
+            <p className="mt-2">
+              Калибровка: {integrity.face.progress}% — держите лицо в кадре.
+            </p>
+          )}
+        </div>
+      ) : null}
+      {integrity.face.status === 'unavailable' ? (
+        <p className="mt-2 text-muted-foreground">
+          Локальная проверка камеры недоступна. Интервью и запись продолжаются.{' '}
+          {allowHeuristicRetry ? (
+            <button className="underline" onClick={integrity.face.retry}>
+              Повторить калибровку
+            </button>
+          ) : null}
+        </p>
+      ) : null}
+      {integrity.uploadError ? (
+        <p className="mt-2 text-amber-800">{integrity.uploadError}</p>
+      ) : null}
+      {integrity.pendingUploads > 0 ? (
+        <p className="mt-1 text-xs text-muted-foreground">
+          Ожидают загрузки: {integrity.pendingUploads} порций и событий.
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
 function InterviewRoom({
   briefing,
   state,
@@ -1062,6 +1226,8 @@ function InterviewRoom({
   notify,
   onComplete,
   onTerminalError,
+  integrity,
+  onRestoreCapture,
 }: {
   briefing: InterviewBriefing;
   state: InterviewState;
@@ -1069,9 +1235,13 @@ function InterviewRoom({
   notify: (message: string) => void;
   onComplete: () => void;
   onTerminalError: (message: string) => void;
+  integrity: IntegrityCapture;
+  onRestoreCapture: () => Promise<void>;
 }) {
   const [question, setQuestion] = useState<PublicQuestion | null>(
-    state.currentQuestion || briefing.currentQuestion,
+    state.integrityBlocked
+      ? null
+      : state.currentQuestion || briefing.currentQuestion,
   );
   const [phase, setPhase] = useState<
     | 'loading-voice'
@@ -1082,7 +1252,9 @@ function InterviewRoom({
     | 'uploading'
     | 'error'
     | 'completing'
+    | 'capture-paused'
   >('loading-voice');
+  const [restoringCapture, setRestoringCapture] = useState(false);
   const [secondsRemaining, setSecondsRemaining] = useState(
     state.remainingSeconds,
   );
@@ -1112,6 +1284,23 @@ function InterviewRoom({
   const playbackAnalyserRef = useRef<AnalyserNode | null>(null);
   const playbackSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
   const hasVideo = stream.getVideoTracks().length > 0;
+  const recordIntegrityEvent = integrity.recordEvent;
+  const syncIntegrityHealth = integrity.syncHealth;
+  const questionId = question?.id;
+  const calibrationPending =
+    integrity.enabled &&
+    ['idle', 'loading', 'ready', 'calibrating'].includes(integrity.face.status);
+
+  useEffect(() => {
+    if (questionId)
+      recordIntegrityEvent(
+        'question_started',
+        {},
+        undefined,
+        undefined,
+        questionId,
+      );
+  }, [questionId, recordIntegrityEvent]);
 
   useEffect(() => {
     if (videoRef.current) videoRef.current.srcObject = stream;
@@ -1214,6 +1403,10 @@ function InterviewRoom({
 
   const beginAnswer = useCallback(() => {
     if (recordingRef.current) return;
+    if (integrity.enabled && (integrity.blocked || calibrationPending)) {
+      setPhase('capture-paused');
+      return;
+    }
     if (secondsRemainingRef.current <= 0) {
       if (answered > 0 || (question?.orderIndex ?? 0) > 0) {
         setPhase('completing');
@@ -1229,6 +1422,13 @@ function InterviewRoom({
       void audioContextRef.current?.resume().catch(() => undefined);
       recordingRef.current = startRecorders(stream);
       answerStartedAtRef.current = performance.now();
+      recordIntegrityEvent(
+        'answer_started',
+        {},
+        undefined,
+        undefined,
+        question?.id,
+      );
       setAnswerSeconds(0);
       setPhase('answering');
       setError('');
@@ -1236,7 +1436,17 @@ function InterviewRoom({
       setError(errorText(caught));
       setPhase('error');
     }
-  }, [answered, onComplete, onTerminalError, question?.orderIndex, stream]);
+  }, [
+    answered,
+    onComplete,
+    onTerminalError,
+    question,
+    stream,
+    integrity.enabled,
+    integrity.blocked,
+    calibrationPending,
+    recordIntegrityEvent,
+  ]);
 
   const playModelVoice = useCallback(async () => {
     const audio = audioRef.current;
@@ -1258,7 +1468,12 @@ function InterviewRoom({
   }, []);
 
   useEffect(() => {
-    if (!question) return;
+    if (
+      !question ||
+      calibrationPending ||
+      (integrity.enabled && integrity.blocked)
+    )
+      return;
     const controller = new AbortController();
     let disposed = false;
     const voiceTimeout = window.setTimeout(() => controller.abort(), 120_000);
@@ -1328,6 +1543,9 @@ function InterviewRoom({
     playModelVoice,
     question,
     voiceAttempt,
+    calibrationPending,
+    integrity.enabled,
+    integrity.blocked,
   ]);
 
   const completeExpiredInterview = useCallback(() => {
@@ -1342,6 +1560,9 @@ function InterviewRoom({
       setPhase('uploading');
       setError('');
       try {
+        // Report capture loss before accepting an answer so the server can keep
+        // the saved answer while withholding the next question.
+        if (integrity.enabled) await syncIntegrityHealth();
         const result = await api.submitAnswer(
           briefing.interviewId,
           answer.question.id,
@@ -1353,7 +1574,10 @@ function InterviewRoom({
         secondsRemainingRef.current = result.remainingSeconds;
         setAnswered((count) => count + 1);
         setPending(null);
-        if (result.nextQuestion) {
+        if (result.integrityBlocked) {
+          setQuestion(null);
+          setPhase('capture-paused');
+        } else if (result.nextQuestion) {
           setPhase('loading-voice');
           setError('');
           setQuestion(result.nextQuestion);
@@ -1383,7 +1607,10 @@ function InterviewRoom({
             if (latest.answeredQuestionIds.includes(answer.question.id)) {
               setPending(null);
               setAnswered((count) => count + 1);
-              if (latest.currentQuestion) {
+              if (latest.integrityBlocked) {
+                setQuestion(null);
+                setPhase('capture-paused');
+              } else if (latest.currentQuestion) {
                 setPhase('loading-voice');
                 setQuestion(latest.currentQuestion);
               } else {
@@ -1414,6 +1641,8 @@ function InterviewRoom({
       completeExpiredInterview,
       notify,
       onComplete,
+      integrity.enabled,
+      syncIntegrityHealth,
     ],
   );
 
@@ -1421,8 +1650,16 @@ function InterviewRoom({
     if (!question || phase !== 'answering' || !recordingRef.current) return;
     setPhase('uploading');
     try {
-      const blobs = await stopRecorders(recordingRef.current);
+      const active = recordingRef.current;
       recordingRef.current = null;
+      recordIntegrityEvent(
+        'answer_ended',
+        {},
+        undefined,
+        undefined,
+        question.id,
+      );
+      const blobs = await stopRecorders(active);
       const answer = {
         question,
         ...blobs,
@@ -1437,7 +1674,13 @@ function InterviewRoom({
       setError(errorText(caught));
       setPhase('error');
     }
-  }, [phase, question, submitPending]);
+  }, [phase, question, submitPending, recordIntegrityEvent]);
+
+  useEffect(() => {
+    if (!integrity.enabled || !integrity.blocked) return;
+    audioRef.current?.pause();
+    if (phase === 'answering') void finishAnswer();
+  }, [integrity.enabled, integrity.blocked, finishAnswer, phase]);
 
   useEffect(() => {
     if (phase !== 'answering') return;
@@ -1501,21 +1744,73 @@ function InterviewRoom({
     [],
   );
 
+  const restoreCapture = async () => {
+    setRestoringCapture(true);
+    setError('');
+    try {
+      await onRestoreCapture();
+      const latest = await api.getInterviewState(briefing.interviewId);
+      setSecondsRemaining(latest.remainingSeconds);
+      secondsRemainingRef.current = latest.remainingSeconds;
+      if (latest.integrityBlocked) {
+        setPhase('capture-paused');
+        return;
+      }
+      if (latest.currentQuestion) {
+        setQuestion(latest.currentQuestion);
+        setPhase('loading-voice');
+        setVoiceAttempt((value) => value + 1);
+      } else if (latest.answeredQuestionIds.length) onComplete();
+    } catch (caught) {
+      setError(errorText(caught));
+    } finally {
+      setRestoringCapture(false);
+    }
+  };
+
+  const captureNotice = (
+    <IntegrityCaptureNotice
+      integrity={integrity}
+      waiting={phase === 'capture-paused' && !question}
+      restoring={restoringCapture || phase === 'uploading'}
+      onRestore={() => void restoreCapture()}
+      allowHeuristicRetry={
+        !pending &&
+        [
+          'loading-voice',
+          'ready-voice',
+          'voice-error',
+          'capture-paused',
+          'error',
+        ].includes(phase)
+      }
+    />
+  );
+
   if (!question) {
     return (
       <main className="candidate-shell">
-        <section className="surface-card p-8 text-center" role="alert">
-          <h1 className="font-semibold">Нет активного вопроса</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Вернитесь по ссылке или обратитесь к рекрутеру.
+        {captureNotice}
+        {error ? (
+          <p className="text-sm text-rose-700" role="alert">
+            {error}
           </p>
-        </section>
+        ) : null}
+        {integrity.enabled ? null : (
+          <section className="surface-card p-8 text-center" role="alert">
+            <h1 className="font-semibold">Нет активного вопроса</h1>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Вернитесь по ссылке или обратитесь к рекрутеру.
+            </p>
+          </section>
+        )}
       </main>
     );
   }
 
   return (
     <main className="interview-room">
+      {captureNotice}
       {!online ? (
         <output className="offline-banner">
           <WifiOff className="size-4" />
@@ -1526,13 +1821,15 @@ function InterviewRoom({
       <div className="interview-topline">
         <div className="flex items-center gap-2 text-xs font-medium">
           <span className="recording-dot" aria-hidden="true" />
-          {phase === 'answering'
-            ? hasVideo
-              ? 'Идёт запись аудио и видео'
-              : 'Идёт запись аудио'
-            : hasVideo
-              ? 'Камера и микрофон включены'
-              : 'Микрофон включён'}
+          {integrity.enabled
+            ? 'Непрерывная запись камеры, микрофона и экрана'
+            : phase === 'answering'
+              ? hasVideo
+                ? 'Идёт запись аудио и видео'
+                : 'Идёт запись аудио'
+              : hasVideo
+                ? 'Камера и микрофон включены'
+                : 'Микрофон включён'}
         </div>
         <div
           className={`interview-timer ${secondsRemaining <= 120 ? 'timer-urgent' : ''}`}
@@ -1608,7 +1905,9 @@ function InterviewRoom({
           <div className="voice-status min-h-20 text-center" aria-live="polite">
             <p className="text-sm font-medium">
               {phase === 'loading-voice'
-                ? 'Готовим озвучку вопроса…'
+                ? calibrationPending
+                  ? 'Завершите калибровку камеры, чтобы начать ответ.'
+                  : 'Готовим озвучку вопроса…'
                 : phase === 'ready-voice'
                   ? 'Нажмите, чтобы услышать вопрос'
                   : phase === 'voice-error'
@@ -1623,7 +1922,9 @@ function InterviewRoom({
                             : 'Загружаем аудио и распознаём речь…'
                           : phase === 'completing'
                             ? 'Завершаем интервью и запускаем анализ…'
-                            : 'Ответ не отправлен'}
+                            : phase === 'capture-paused'
+                              ? 'Ожидаем восстановления обязательной записи.'
+                              : 'Ответ не отправлен'}
             </p>
             {phase === 'ready-voice' ? (
               <Button
@@ -1730,11 +2031,13 @@ function Processing({
   completing,
   completionError,
   onRetry,
+  integrity,
 }: {
   outcome: CandidateOutcome | null;
   completing: boolean;
   completionError: string;
   onRetry: () => void;
+  integrity: IntegrityCapture;
 }) {
   return (
     <main className="candidate-shell grid min-h-[calc(100dvh-68px)] place-items-center py-12 text-center">
@@ -1755,6 +2058,31 @@ function Processing({
           <Badge className="mt-5 bg-blue-50 text-blue-700">
             Решение ожидается
           </Badge>
+        ) : null}
+        {integrity.enabled &&
+        (integrity.pendingUploads > 0 || integrity.uploadError) ? (
+          <div
+            className="mx-auto mt-5 max-w-lg rounded-xl bg-amber-50 p-4 text-sm"
+            aria-live="polite"
+          >
+            <p>
+              Ответы переданы на оценку. Материалы контроля ещё загружаются;
+              оставьте страницу открытой до завершения.
+            </p>
+            {integrity.uploadError ? (
+              <p className="mt-2">{integrity.uploadError}</p>
+            ) : null}
+            <p className="mt-2">
+              Ожидают отправки: {integrity.pendingUploads}.
+            </p>
+            <Button
+              className="mt-3"
+              variant="outline"
+              onClick={() => void integrity.flush()}
+            >
+              Повторить загрузку материалов
+            </Button>
+          </div>
         ) : null}
         {completionError ? (
           <div
@@ -1854,6 +2182,11 @@ export function CandidateApp({
   const [completing, setCompleting] = useState(false);
   const [completionError, setCompletionError] = useState('');
   const completionInFlight = useRef(false);
+  const integrity = useIntegrityCapture(
+    briefing?.interviewId,
+    Boolean(briefing?.integrityEnabled || interviewState?.integrityEnabled),
+  );
+  const finishIntegrity = integrity.finish;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1876,7 +2209,7 @@ export function CandidateApp({
             activeInterview.interviewId,
             controller.signal,
           );
-          if (!state.currentQuestion) {
+          if (!state.currentQuestion && !state.integrityBlocked) {
             setView('processing');
             setCompleting(true);
             try {
@@ -1997,14 +2330,24 @@ export function CandidateApp({
     setView(nextView);
   };
 
-  const startInterview = async (media: MediaStream) => {
+  const startInterview = async (media: MediaStream, display?: MediaStream) => {
     if (!briefing) return;
     streamRef.current = media;
     setStream(media);
     setError('');
     try {
+      if (briefing.integrityEnabled) {
+        if (!display)
+          throw new Error('Для интервью нужна демонстрация всего экрана.');
+        await integrity.start(media, display);
+      }
       const state = await api.startInterview(briefing.interviewId, true);
-      if (!state.currentQuestion && !briefing.currentQuestion) {
+      if (
+        !state.currentQuestion &&
+        !briefing.currentQuestion &&
+        !state.integrityBlocked
+      ) {
+        await finishIntegrity();
         media.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
         setStream(null);
@@ -2023,12 +2366,48 @@ export function CandidateApp({
       setInterviewState(state);
       setView('interview');
     } catch (caught) {
+      await integrity.pause();
+      display?.getTracks().forEach((track) => track.stop());
       media.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
       setStream(null);
       setView('preparation');
       setError(errorText(caught));
       notify(errorText(caught));
+    }
+  };
+
+  const restoreCapture = async () => {
+    let media = streamRef.current;
+    let display = integrity.screen;
+    const cameraWorks =
+      media
+        ?.getVideoTracks()
+        .some((track) => track.readyState === 'live' && !track.muted) &&
+      media
+        ?.getAudioTracks()
+        .some((track) => track.readyState === 'live' && !track.muted);
+    const displayWorks = display
+      ?.getVideoTracks()
+      .some((track) => track.readyState === 'live' && !track.muted);
+    try {
+      // Screen capture must be requested directly from this user gesture.
+      if (!displayWorks) display = await requestIntegrityScreen();
+      if (!cameraWorks) media = await requestInterviewMedia();
+      if (!media || !display)
+        throw new Error('Не удалось восстановить обязательные устройства.');
+      await integrity.start(media, display);
+      if (media !== streamRef.current)
+        streamRef.current?.getTracks().forEach((track) => track.stop());
+      streamRef.current = media;
+      setStream(media);
+      await integrity.syncHealth();
+    } catch (caught) {
+      if (media !== streamRef.current)
+        media?.getTracks().forEach((track) => track.stop());
+      if (display !== integrity.screen)
+        display?.getTracks().forEach((track) => track.stop());
+      throw caught;
     }
   };
 
@@ -2055,16 +2434,20 @@ export function CandidateApp({
   }, [briefing]);
 
   const complete = useCallback(() => {
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    streamRef.current = null;
-    setStream(null);
-    setView('processing');
-    notify('Интервью завершено и передано команде');
-    void finalizeInterview();
-  }, [finalizeInterview, notify]);
+    void (async () => {
+      await finishIntegrity();
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+      setStream(null);
+      setView('processing');
+      notify('Интервью завершено и передано команде');
+      await finalizeInterview();
+    })();
+  }, [finalizeInterview, notify, finishIntegrity]);
 
   const stopAfterTerminalError = useCallback(
     (message: string) => {
+      void finishIntegrity();
       streamRef.current?.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
       setStream(null);
@@ -2078,7 +2461,7 @@ export function CandidateApp({
       setView('home');
       notify(message);
     },
-    [notify],
+    [notify, finishIntegrity],
   );
 
   if (outcome && outcome.status !== 'pending')
@@ -2092,6 +2475,7 @@ export function CandidateApp({
         completing={completing}
         completionError={completionError}
         onRetry={() => void finalizeInterview()}
+        integrity={integrity}
       />
     );
   if (view === 'interview' && briefing && interviewState && stream)
@@ -2103,6 +2487,8 @@ export function CandidateApp({
         notify={notify}
         onComplete={complete}
         onTerminalError={stopAfterTerminalError}
+        integrity={integrity}
+        onRestoreCapture={restoreCapture}
       />
     );
   if (view === 'practice_interview' && practiceSet && stream)
@@ -2143,6 +2529,7 @@ export function CandidateApp({
         <Preflight
           onBack={() => setView('preparation')}
           onReady={startInterview}
+          integrityEnabled={Boolean(briefing.integrityEnabled)}
         />
         {error ? (
           <div className="app-notice app-notice-visible" role="alert">

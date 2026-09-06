@@ -1,0 +1,10 @@
+MediaPipe Face Landmarker model, float16, version 1
+Source: https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task
+SHA-256: 64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff
+Documentation and model license: https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker
+
+Runtime: @mediapipe/tasks-vision 0.10.32, Apache License 2.0.
+Runtime and WASM files are copied from the pinned npm package during dev/build.
+The model and all runtime assets are served by this application. Inference runs
+locally in a dedicated worker. Raw landmarks and biometric templates are not
+uploaded or stored. Only calibrated, weak event intervals leave the worker.

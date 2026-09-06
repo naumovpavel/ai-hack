@@ -182,6 +182,7 @@ class InterviewRow(WorkflowBase):
     __tablename__ = "workflow_interviews"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    integrity_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     candidate_id: Mapped[str] = mapped_column(
         ForeignKey("workflow_candidates.id", ondelete="CASCADE"), unique=True, index=True
     )

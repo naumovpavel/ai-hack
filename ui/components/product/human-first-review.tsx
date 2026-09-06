@@ -17,6 +17,7 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { api } from '@/lib/api';
 import { AnswerEvidence } from './answer-evidence';
+import { IntegrityReview } from './integrity-review';
 import type {
   Analysis,
   CandidateDetail,
@@ -908,6 +909,7 @@ export function HumanFirstReview({
             : 'Рекомендация ИИ откроется после вашего решения и фидбэка.'}
         </p>
       ) : null}
+      {!practice ? <IntegrityReview candidateId={candidate.id} /> : null}
       {media?.assets.length ? (
         <details className="rounded-xl border bg-card p-4">
           <summary className="cursor-pointer text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">
