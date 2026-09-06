@@ -89,6 +89,7 @@ class WorkflowAIGateway(Protocol):
         level_band: str,
         question_count: int,
         language: str,
+        broad_topics: list[str] | None = None,
     ) -> list[PracticeQuestionProposal]: ...
 
     async def transcribe(
@@ -170,32 +171,19 @@ class DeterministicWorkflowAI:
         level_band: str,
         question_count: int,
         language: str,
+        broad_topics: list[str] | None = None,
     ) -> list[PracticeQuestionProposal]:
-        del level_band, language
-        templates = [
-            (
-                "Разбор ситуации",
-                "Представьте учебный сервис в незнакомой предметной области. "
-                "Как бы вы уточнили задачу и выбрали первый шаг к решению?",
-            ),
-            (
-                "Принятие решений",
-                "Расскажите на вымышленном примере, как сравнить два технических "
-                "подхода и проверить, что выбранный вариант работает.",
-            ),
-            (
-                "Рефлексия",
-                "Допустим, результат учебного проекта оказался хуже ожидаемого. "
-                "Как бы вы нашли причину и изменили свой подход?",
-            ),
-        ]
+        from interview_api.workflow.practice_topics import fallback_questions
+
+        del role_family, level_band, language
+        topics = broad_topics or ["Профессиональная практика"]
         return [
             PracticeQuestionProposal(
-                text=text,
-                topic=f"{topic} · {role_family}",
+                text=fallback_questions(topics[index % len(topics)])[index // len(topics) % 3],
+                topic=topics[index % len(topics)],
                 answer_seconds=90,
             )
-            for topic, text in templates[:question_count]
+            for index in range(question_count)
         ]
 
     async def transcribe(

@@ -99,9 +99,11 @@ class PracticeIsolationAI(FollowUpWorkflowAI):
         level_band: str,
         question_count: int,
         language: str,
+        broad_topics: list[str] | None = None,
     ) -> list[PracticeQuestionProposal]:
         self.practice_calls.append(
             {
+                "broad_topics": broad_topics,
                 "role_family": role_family,
                 "level_band": level_band,
                 "question_count": question_count,
@@ -419,7 +421,7 @@ def test_practice_questions_are_isolated_and_do_not_start_interview(
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["mode"] == "practice"
-    assert payload["localOnly"] is True
+    assert payload["localOnly"] is False
     assert len(payload["questions"]) == 3
     assert all(item["id"].startswith("practice-") for item in payload["questions"])
     assert {item["text"] for item in payload["questions"]}.isdisjoint(
@@ -427,6 +429,7 @@ def test_practice_questions_are_isolated_and_do_not_start_interview(
     )
     assert len(practice_ai.practice_calls) == 2
     assert set(practice_ai.practice_calls[0]) == {
+        "broad_topics",
         "role_family",
         "level_band",
         "question_count",
@@ -446,7 +449,7 @@ def test_practice_questions_are_isolated_and_do_not_start_interview(
         json={"consentToRecording": True},
     )
     assert started.status_code == 200
-    assert client.post(f"/api/v1/interviews/{interview_id}/practice").status_code == 409
+    assert client.post(f"/api/v1/interviews/{interview_id}/practice").json() == payload
 
 
 def test_practice_requires_the_invited_candidate(workflow_client):
@@ -507,11 +510,11 @@ def test_practice_generation_finishing_after_real_start_is_rejected(workflow_cli
 
     monkeypatch.setattr(service.ai, "generate_practice_questions", start_while_generating)
     assert client.post(f"/api/v1/interviews/{interview_id}/practice").status_code == 409
-    assert interview_id not in service._practice_sets
+    assert asyncio.run(service.practice_repository.for_interview(interview_id)) is None
 
 
 @pytest.mark.parametrize("status", ["in_progress", "analyzing", "completed", "error"])
-def test_practice_rejects_non_ready_interviews_even_with_cached_examples(workflow_client, status):
+def test_existing_practice_remains_available_after_real_interview_starts(workflow_client, status):
     client, service, _ = workflow_client
     _, candidate_id, _ = _create_hr_position_and_candidate(client)
     approval = client.post(f"/api/v1/candidates/{candidate_id}/questions/approve").json()
@@ -519,9 +522,9 @@ def test_practice_rejects_non_ready_interviews_even_with_cached_examples(workflo
     _sign_in_telegram(client, service)
     client.post("/api/v1/invites/resolve", json={"token": approval["inviteToken"]})
     path = f"/api/v1/interviews/{interview_id}/practice"
-    assert client.post(path).status_code == 200
+    initial = client.post(path).json()
     asyncio.run(service.repository.set_interview_status(interview_id, status))
-    assert client.post(path).status_code == 409
+    assert client.post(path).json() == initial
 
 
 def test_answer_finishing_at_deadline_is_saved_and_ends_interview(
@@ -1081,7 +1084,9 @@ async def test_openrouter_practice_prompt_receives_only_coarse_profile() -> None
     _url, body, _headers = pool.requests[0]
     request_payload = json.loads(body)
     user_payload = json.loads(request_payload["messages"][1]["content"])
-    assert set(user_payload) == {"roleFamily", "levelBand", "questionCount", "language"}
+    assert set(user_payload) == {
+        "broadTopics", "roleFamily", "levelBand", "questionCount", "language"
+    }
     serialized = json.dumps(user_payload, ensure_ascii=False).casefold()
     assert all(
         forbidden not in serialized

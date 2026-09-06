@@ -29,6 +29,10 @@ class ObjectStorage(Protocol):
 
     async def get_bytes(self, key: str) -> bytes: ...
 
+    async def delete_owned_objects(
+        self, *, keys: tuple[str, ...], prefixes: tuple[str, ...]
+    ) -> None: ...
+
     async def presign_download(
         self,
         key: str,
@@ -112,6 +116,33 @@ class S3ObjectStorage:
                 details={"objectKey": key},
             ) from exc
 
+    async def delete_owned_objects(
+        self, *, keys: tuple[str, ...], prefixes: tuple[str, ...]
+    ) -> None:
+        for key in (*keys, *prefixes):
+            self._validate_key(key)
+        if any(not prefix.startswith("candidates/") or not prefix.endswith("/")
+               or len(prefix.split("/")) < 3 or not prefix.split("/")[1]
+               for prefix in prefixes):
+            raise ValueError("Only individual candidate prefixes can be deleted")
+
+        def remove() -> None:
+            object_keys = set(keys)
+            for prefix in prefixes:
+                paginator = self._client.get_paginator("list_objects_v2")
+                for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix):
+                    object_keys.update(item["Key"] for item in page.get("Contents", []))
+            ordered = sorted(object_keys)
+            for offset in range(0, len(ordered), 1000):
+                result = self._client.delete_objects(
+                    Bucket=self.bucket,
+                    Delete={"Objects": [{"Key": key} for key in ordered[offset:offset + 1000]]},
+                )
+                if result.get("Errors"):
+                    raise WorkflowProviderError("Some deleted interview objects need cleanup.")
+
+        await asyncio.to_thread(remove)
+
     async def presign_download(
         self,
         key: str,
@@ -179,6 +210,13 @@ class MemoryObjectStorage:
             return self.objects[key][0]
         except KeyError as exc:
             raise WorkflowNotFoundError(details={"objectKey": key}) from exc
+
+    async def delete_owned_objects(
+        self, *, keys: tuple[str, ...], prefixes: tuple[str, ...]
+    ) -> None:
+        for key in list(self.objects):
+            if key in keys or any(key.startswith(prefix) for prefix in prefixes):
+                del self.objects[key]
 
     async def presign_download(
         self,

@@ -18,6 +18,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { api, ApiError } from '@/lib/api';
+import { copyText } from '@/lib/clipboard';
 import type {
   Analysis,
   Approval,
@@ -214,7 +215,8 @@ function QuestionApproval({
   const copyInvite = async () => {
     if (!approval) return;
     try {
-      await navigator.clipboard.writeText(approval.inviteUrl);
+      if (!(await copyText(approval.inviteUrl)))
+        throw new Error('Clipboard unavailable');
       notify('Ссылка скопирована');
     } catch {
       setError(
@@ -346,9 +348,13 @@ function QuestionApproval({
             <CheckCircle2 className="mt-0.5 size-5 text-emerald-600" />
             <div className="min-w-0 flex-1">
               <h2 className="font-semibold">Ссылка готова</h2>
-              <p className="mt-1 break-all text-sm text-muted-foreground">
-                {approval.inviteUrl}
-              </p>
+              <Input
+                aria-label="Ссылка на интервью"
+                className="mt-2"
+                value={approval.inviteUrl}
+                readOnly
+                onFocus={(event) => event.currentTarget.select()}
+              />
               <p className="mt-2 text-xs text-muted-foreground">
                 Действует до {formatDate(approval.expiresAt)}
               </p>
