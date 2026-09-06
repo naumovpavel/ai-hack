@@ -873,6 +873,9 @@ class SqlAlchemyWorkflowRepository(TelegramRepositoryMixin):
                 delete(AnalysisRow).where(AnalysisRow.candidate_id == candidate_id)
             )
             session.add(analysis)
+            # These mappers have no ORM relationship to order their inserts.
+            # Persist the parent before its items while keeping one transaction.
+            await session.flush()
             session.add_all(items)
         return analysis, items
 
