@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     session_cookie_name: str = "signal_session"
     session_ttl_hours: int = Field(default=168, ge=1, le=24 * 90)
     invite_ttl_days: int = Field(default=14, ge=1, le=90)
+    integrity_enabled: bool = False
+    integrity_worker_enabled: bool = True
+    integrity_ffmpeg_path: str = "ffmpeg"
+    integrity_ffprobe_path: str = "ffprobe"
 
     # New workflow models all run through OpenRouter. OPENAI_API_KEY remains
     # supported below for the legacy single-answer evaluator.

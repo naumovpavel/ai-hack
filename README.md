@@ -1,5 +1,9 @@
 # AI interview — local development
 
+Optional continuous integrity recording and human video review are documented in
+[backend/docs/integrity.md](backend/docs/integrity.md). The feature is disabled by default
+and applies only to new interviews created after `INTEGRITY_ENABLED=true`.
+
 This repository contains a React/Vinext client and a FastAPI interview workflow.
 The root Compose stack runs the application with PostgreSQL and private
 S3-compatible storage in MinIO.

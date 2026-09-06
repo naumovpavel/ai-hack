@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import time
 from pathlib import Path
 from urllib.parse import quote
 
@@ -28,7 +29,7 @@ from interview_api.workflow.storage import StoredObject
 class LocalObjectStorage:
     def __init__(self, root: Path) -> None:
         self.root = root.resolve()
-        self._downloads: dict[str, tuple[str, str, bool]] = {}
+        self._downloads: dict[str, tuple[str, str, bool, float]] = {}
 
     async def ensure_bucket(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -56,6 +57,20 @@ class LocalObjectStorage:
     async def get_bytes(self, key: str) -> bytes:
         return self._path(key).read_bytes()
 
+    async def object_exists(self, key: str) -> bool:
+        return self._path(key).is_file()
+
+    async def delete_owned_objects(
+        self, *, keys: tuple[str, ...], prefixes: tuple[str, ...]
+    ) -> None:
+        for key in keys:
+            self._path(key).unlink(missing_ok=True)
+        for prefix in prefixes:
+            if not prefix.startswith("candidates/") or not prefix.endswith("/"):
+                raise ValueError("Only candidate media prefixes can be deleted")
+            import shutil
+            shutil.rmtree(self._path(prefix), ignore_errors=True)
+
     async def presign_download(
         self,
         key: str,
@@ -64,20 +79,24 @@ class LocalObjectStorage:
         expires_seconds: int = 900,
         inline: bool = False,
     ) -> str:
-        del expires_seconds
+        self._downloads = {key: value for key, value in self._downloads.items()
+                           if value[3] > time.time()}
         token = secrets.token_urlsafe(24)
-        self._downloads[token] = (key, filename, inline)
+        self._downloads[token] = (key, filename, inline, time.time() + expires_seconds)
         return f"http://127.0.0.1:8000/api/v1/local-media/{quote(token)}"
 
     def resolve_download(self, token: str) -> tuple[Path, str, bool]:
         try:
-            key, filename, inline = self._downloads[token]
+            key, filename, inline, expires_at = self._downloads[token]
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Download expired") from exc
+        if time.time() >= expires_at:
+            self._downloads.pop(token, None)
+            raise HTTPException(status_code=403, detail="Download expired")
         return self._path(key), filename, inline
 
 
-settings = Settings(app_env="test", _env_file=Path(__file__).resolve().parents[3] / ".env")
+settings = Settings(app_env="local", _env_file=Path(__file__).resolve().parents[3] / ".env")
 engine = create_async_engine(os.environ.get(
     "SIGNAL_LOCAL_DATABASE_URL", "sqlite+aiosqlite:////private/tmp/signal-interview-demo.sqlite3"
 ))

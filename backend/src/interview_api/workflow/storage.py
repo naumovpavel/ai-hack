@@ -16,6 +16,8 @@ class StoredObject:
 
 
 class ObjectStorage(Protocol):
+    async def object_exists(self, key: str) -> bool: ...
+
     async def ensure_bucket(self) -> None: ...
 
     async def put_bytes(
@@ -116,6 +118,23 @@ class S3ObjectStorage:
                 details={"objectKey": key},
             ) from exc
 
+    async def object_exists(self, key: str) -> bool:
+        self._validate_key(key)
+        try:
+            await asyncio.to_thread(self._client.head_object, Bucket=self.bucket, Key=key)
+            return True
+        except Exception:
+            return False
+
+    async def configure_media_cors(self, origins: list[str]) -> None:
+        await asyncio.to_thread(self._client.put_bucket_cors, Bucket=self.bucket,
+            CORSConfiguration={"CORSRules": [{
+                "AllowedOrigins": origins, "AllowedMethods": ["GET", "HEAD"],
+                "AllowedHeaders": ["Range", "If-Range", "Content-Type"],
+                "ExposeHeaders": ["Accept-Ranges", "Content-Range", "Content-Length", "ETag"],
+                "MaxAgeSeconds": 3600,
+            }]})
+
     async def delete_owned_objects(
         self, *, keys: tuple[str, ...], prefixes: tuple[str, ...]
     ) -> None:
@@ -192,6 +211,9 @@ class MemoryObjectStorage:
 
     async def ensure_bucket(self) -> None:
         return None
+
+    async def object_exists(self, key: str) -> bool:
+        return key in self.objects
 
     async def put_bytes(
         self,

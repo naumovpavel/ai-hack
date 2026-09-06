@@ -32,6 +32,11 @@ from interview_api.services.document_extraction import DocumentExtractionService
 from interview_api.services.question_generation import QuestionGenerationService
 from interview_api.services.transcription import TranscriptionService
 from interview_api.workflow.deletion_routes import router as deletion_router
+from interview_api.workflow.integrity_ai import IntegrityAI
+from interview_api.workflow.integrity_media import IntegrityMedia
+from interview_api.workflow.integrity_routes import router as integrity_router
+from interview_api.workflow.integrity_service import IntegrityService
+from interview_api.workflow.integrity_worker import IntegrityWorker
 from interview_api.workflow.openrouter import OpenRouterWorkflowAI
 from interview_api.workflow.repository import SqlAlchemyWorkflowRepository
 from interview_api.workflow.service import WorkflowService
@@ -215,6 +220,25 @@ def create_app(
         if workflow_service is not None and resolved_settings.telegram_bot_token
         else None
     )
+    integrity_worker = None
+    if workflow_service is not None:
+        workflow_service.repository.integrity_enabled_for_new_interviews = (
+            resolved_settings.integrity_enabled
+        )
+        workflow_service.integrity = IntegrityService(workflow_service)
+        if resolved_settings.integrity_worker_enabled and resolved_settings.app_env != "test":
+            integrity_worker = IntegrityWorker(
+                workflow_service.integrity,
+                media=IntegrityMedia(workflow_service.storage,
+                    ffmpeg=resolved_settings.integrity_ffmpeg_path,
+                    ffprobe=resolved_settings.integrity_ffprobe_path),
+                ai=IntegrityAI(
+                    api_key=resolved_settings.openrouter_api_key.get_secret_value()
+                    if resolved_settings.openrouter_api_key else "",
+                    base_url=resolved_settings.openrouter_base_url,
+                    timeout_seconds=resolved_settings.openrouter_timeout_seconds,
+                ),
+            )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -224,6 +248,8 @@ def create_app(
                 if workflow_engine is not None:
                     await workflow_service.repository.initialize(workflow_engine)
                 await workflow_service.initialize()
+                if integrity_worker is not None:
+                    await integrity_worker.start()
                 if telegram_runtime is not None:
                     await telegram_runtime.start()
             if (
@@ -251,6 +277,8 @@ def create_app(
                     logger.exception("Failed to initialize the transcription provider")
             yield
         finally:
+            if integrity_worker is not None:
+                await integrity_worker.stop()
             if telegram_runtime is not None:
                 await telegram_runtime.stop()
             if managed_transcription_provider is not None:
@@ -284,6 +312,7 @@ def create_app(
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["Accept-Ranges", "Content-Range", "Content-Length", "ETag"],
     )
 
     register_exception_handlers(app)
@@ -295,6 +324,7 @@ def create_app(
     app.include_router(practice_router)
     app.include_router(deletion_router)
     app.include_router(telegram_router)
+    app.include_router(integrity_router)
     return app
 
 
