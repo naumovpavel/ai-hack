@@ -20,6 +20,7 @@ import type {
   PositionSummary,
   QuestionRating,
   InitialDecisionInput,
+  PracticeSet,
   Session,
   User,
   ContextDocument,
@@ -628,6 +629,16 @@ export const api = {
       signal,
       allowNotFound: true,
     });
+  },
+
+  createPracticeSet(
+    interviewId: string,
+    signal?: AbortSignal,
+  ): Promise<PracticeSet> {
+    return required<PracticeSet>(
+      `/interviews/${encodeURIComponent(interviewId)}/practice`,
+      { method: 'POST', signal },
+    );
   },
 
   startInterview(

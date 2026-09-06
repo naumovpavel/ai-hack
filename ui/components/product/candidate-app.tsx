@@ -1,6 +1,12 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+} from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -30,12 +36,16 @@ import type {
   CandidateOutcome,
   InterviewBriefing,
   InterviewState,
+  PracticeSet,
   PublicQuestion,
 } from '@/lib/types';
 
 type CandidateView =
   | 'home'
   | 'preparation'
+  | 'practice_preflight'
+  | 'practice_interview'
+  | 'practice_complete'
   | 'preflight'
   | 'interview'
   | 'processing';
@@ -285,12 +295,22 @@ function CandidateHome({
 
 function Preparation({
   briefing,
+  practiceSet,
+  practiceLoading,
+  practiceError,
   onBack,
   onContinue,
+  onLoadExamples,
+  onPractice,
 }: {
   briefing: InterviewBriefing;
+  practiceSet: PracticeSet | null;
+  practiceLoading: boolean;
+  practiceError: string;
   onBack: () => void;
   onContinue: () => void;
+  onLoadExamples: () => void;
+  onPractice: () => void;
 }) {
   const [consent, setConsent] = useState(false);
   return (
@@ -351,6 +371,71 @@ function Preparation({
               })}
             </div>
           </section>
+
+          {briefing.status === 'ready' ? (
+            <section className="surface-card mt-4 p-5 sm:p-6">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="max-w-xl">
+                  <h2 className="font-semibold">Попробуйте до начала</h2>
+                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                    Примеры показывают только формат общения. Они созданы для
+                    похожей вымышленной ситуации и не повторяют вопросы этого
+                    интервью.
+                  </p>
+                </div>
+                <Badge className="bg-emerald-50 text-emerald-700">
+                  Не влияет на оценку
+                </Badge>
+              </div>
+              {practiceSet ? (
+                <div className="mt-5 grid gap-3">
+                  {practiceSet.questions.map((question, index) => (
+                    <article
+                      key={question.id}
+                      className="rounded-xl border border-border/70 bg-muted/40 p-4"
+                    >
+                      <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                        <span>Тренировочный пример {index + 1}</span>
+                        <span>{question.topic}</span>
+                      </div>
+                      <p className="mt-2 text-sm leading-relaxed">
+                        {question.text}
+                      </p>
+                    </article>
+                  ))}
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    {practiceSet.notice}
+                  </p>
+                </div>
+              ) : null}
+              {practiceError ? (
+                <p className="mt-4 text-sm text-rose-700" role="alert">
+                  {practiceError}
+                </p>
+              ) : null}
+              <div className="mt-5 flex flex-wrap gap-3">
+                <Button
+                  variant="outline"
+                  onClick={onLoadExamples}
+                  disabled={practiceLoading || Boolean(practiceSet)}
+                >
+                  {practiceLoading ? (
+                    <LoaderCircle
+                      className="animate-spin"
+                      data-icon="inline-start"
+                    />
+                  ) : (
+                    <Lightbulb data-icon="inline-start" />
+                  )}
+                  {practiceSet ? 'Примеры загружены' : 'Посмотреть примеры'}
+                </Button>
+                <Button onClick={onPractice} disabled={practiceLoading}>
+                  <Mic2 data-icon="inline-start" />
+                  Пройти тренировку
+                </Button>
+              </div>
+            </section>
+          ) : null}
 
           <section className="surface-card mt-4 p-5 sm:p-6">
             <h2 className="font-semibold">Темы интервью</h2>
@@ -441,9 +526,11 @@ function Preparation({
 function Preflight({
   onBack,
   onReady,
+  practice = false,
 }: {
   onBack: () => void;
   onReady: (stream: MediaStream) => void;
+  practice?: boolean;
 }) {
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [status, setStatus] = useState<
@@ -496,8 +583,9 @@ function Preflight({
         <p className="eyebrow">Проверка устройств</p>
         <h1 className="page-title">Камера и микрофон</h1>
         <p className="mx-auto mt-3 max-w-xl text-sm text-muted-foreground">
-          Разрешите доступ в системном окне браузера. Запись начнётся только
-          после кнопки «Начать интервью».
+          {practice
+            ? 'Разрешите доступ в системном окне. Тренировочная запись останется в браузере и будет удалена после ответа.'
+            : 'Разрешите доступ в системном окне браузера. Запись начнётся только после кнопки «Начать интервью».'}
         </p>
       </div>
       <div className="preflight-grid mt-7">
@@ -553,7 +641,7 @@ function Preflight({
                 onReady(stream);
               }}
             >
-              Начать интервью
+              {practice ? 'Начать тренировку' : 'Начать интервью'}
               <ArrowRight data-icon="inline-end" />
             </Button>
           ) : (
@@ -579,6 +667,266 @@ function Preflight({
           ) : null}
         </section>
       </div>
+    </main>
+  );
+}
+
+function PracticeRoom({
+  practiceSet,
+  stream,
+  onComplete,
+  onBack,
+}: {
+  practiceSet: PracticeSet;
+  stream: MediaStream;
+  onComplete: () => void;
+  onBack: () => void;
+}) {
+  const [questionIndex, setQuestionIndex] = useState(0);
+  const [recording, setRecording] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [error, setError] = useState('');
+  const [secondsLeft, setSecondsLeft] = useState(
+    practiceSet.questions[0]?.answerSeconds ?? 90,
+  );
+  const recorderRef = useRef<RecorderBundle | null>(null);
+  const mountedRef = useRef(true);
+  const answerDeadlineRef = useRef(0);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const questions = practiceSet.questions;
+  const question = questions[questionIndex];
+
+  useEffect(() => {
+    if (videoRef.current) videoRef.current.srcObject = stream;
+  }, [stream]);
+
+  const finishAnswer = async () => {
+    const active = recorderRef.current;
+    if (!active) return;
+    recorderRef.current = null;
+    setStopping(true);
+    setRecording(false);
+    try {
+      // The returned blobs deliberately remain local and are immediately discarded.
+      await stopRecorders(active);
+      if (!mountedRef.current) return;
+      const nextIndex = questionIndex + 1;
+      if (nextIndex >= questions.length) {
+        onComplete();
+        return;
+      }
+      setQuestionIndex(nextIndex);
+      setSecondsLeft(questions[nextIndex]?.answerSeconds ?? 90);
+    } catch (caught) {
+      if (mountedRef.current) setError(errorText(caught));
+    } finally {
+      active.audio.ondataavailable = null;
+      active.video.ondataavailable = null;
+      active.audioChunks.length = 0;
+      active.videoChunks.length = 0;
+      if (mountedRef.current) setStopping(false);
+    }
+  };
+  const finishAnswerOnTimeout = useEffectEvent(finishAnswer);
+
+  useEffect(() => {
+    if (!recording) return;
+    const timer = window.setInterval(() => {
+      const remaining = Math.max(
+        0,
+        Math.ceil((answerDeadlineRef.current - performance.now()) / 1000),
+      );
+      setSecondsLeft(remaining);
+      if (remaining === 0) {
+        window.clearInterval(timer);
+        void finishAnswerOnTimeout();
+      }
+    }, 250);
+    return () => window.clearInterval(timer);
+  }, [recording]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      window.speechSynthesis?.cancel();
+      const active = recorderRef.current;
+      recorderRef.current = null;
+      if (active) {
+        active.audio.ondataavailable = null;
+        active.video.ondataavailable = null;
+        if (active.audio.state !== 'inactive') active.audio.stop();
+        if (active.video.state !== 'inactive') active.video.stop();
+        active.audioChunks.length = 0;
+        active.videoChunks.length = 0;
+      }
+    };
+  }, []);
+
+  const speakQuestion = () => {
+    if (!question || !('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(question.text);
+    utterance.lang = 'ru-RU';
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const startAnswer = () => {
+    if (!question || recording || stopping) return;
+    window.speechSynthesis?.cancel();
+    setError('');
+    try {
+      recorderRef.current = startRecorders(stream);
+      answerDeadlineRef.current =
+        performance.now() + question.answerSeconds * 1000;
+      setSecondsLeft(question.answerSeconds);
+      setRecording(true);
+    } catch (caught) {
+      setError(errorText(caught));
+      setRecording(false);
+    }
+  };
+
+  if (!question) return null;
+  return (
+    <main className="interview-room">
+      <div className="px-5 pt-4">
+        <BackButton onClick={onBack} label="Выйти из тренировки" />
+      </div>
+      <div className="interview-topline">
+        <div className="flex items-center gap-2 text-xs font-medium">
+          <span
+            className={recording ? 'recording-dot' : ''}
+            aria-hidden="true"
+          />
+          {recording
+            ? 'Тренировочная запись — только в этом браузере'
+            : 'Тренировка не передаётся рекрутеру'}
+        </div>
+        <div className="interview-timer">
+          <Clock3 />
+          {formatTimer(secondsLeft)}
+        </div>
+      </div>
+      <div className="interview-content">
+        <div className="mx-auto max-w-3xl text-center">
+          <div className="mb-4 flex flex-wrap justify-center gap-2">
+            <Badge className="bg-emerald-50 text-emerald-700">
+              Тренировочный пример
+            </Badge>
+            <Badge variant="outline">{question.topic}</Badge>
+          </div>
+          <h1 className="interview-question">{question.text}</h1>
+          <p className="mt-3 text-xs text-muted-foreground">
+            Настоящие вопросы будут другими. Содержание этого ответа не
+            оценивается.
+          </p>
+        </div>
+        <div className="voice-stage">
+          <video
+            ref={videoRef}
+            autoPlay
+            muted
+            playsInline
+            className="mb-5 aspect-video w-40 rounded-xl bg-black object-cover shadow-lg"
+            aria-label="Локальный предпросмотр тренировочной записи"
+          />
+          <button
+            className={`voice-orb ${recording ? 'orb-answering' : 'orb-asking'}`}
+            onClick={() => (recording ? void finishAnswer() : startAnswer())}
+            disabled={stopping}
+            aria-label={
+              recording ? 'Закончить тренировочный ответ' : 'Начать ответ'
+            }
+          >
+            <span className="orb-wave orb-wave-one" />
+            <span className="orb-wave orb-wave-two" />
+            <span className="orb-core">
+              {stopping ? (
+                <LoaderCircle className="animate-spin" />
+              ) : recording ? (
+                <Check />
+              ) : (
+                <Mic />
+              )}
+            </span>
+          </button>
+          <p
+            className="mt-6 text-center text-sm font-medium"
+            aria-live="polite"
+          >
+            {stopping
+              ? 'Удаляем локальную запись и готовим следующий пример…'
+              : recording
+                ? 'Говорите и нажмите на круг, когда закончите.'
+                : 'Нажмите на круг, чтобы начать тренировочный ответ.'}
+          </p>
+          {!recording && !stopping ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="mt-2"
+              onClick={speakQuestion}
+            >
+              <Volume2 data-icon="inline-start" />
+              Озвучить вопрос
+            </Button>
+          ) : null}
+          {error ? (
+            <p className="mt-3 text-sm text-rose-700" role="alert">
+              {error}
+            </p>
+          ) : null}
+        </div>
+        <div className="interview-progress-wrap">
+          <div className="mb-2 flex justify-between text-xs text-muted-foreground">
+            <span>Пример {questionIndex + 1}</span>
+            <span>Всего: {questions.length}</span>
+          </div>
+          <div className="interview-progress">
+            <span
+              style={{
+                width: `${((questionIndex + (recording ? 0.5 : 0)) / Math.max(1, questions.length)) * 100}%`,
+              }}
+            />
+          </div>
+        </div>
+      </div>
+    </main>
+  );
+}
+
+function PracticeComplete({
+  onBack,
+  onRealInterview,
+}: {
+  onBack: () => void;
+  onRealInterview: () => void;
+}) {
+  return (
+    <main className="candidate-shell grid min-h-[calc(100dvh-68px)] place-items-center py-12 text-center">
+      <section className="surface-card max-w-xl p-7 sm:p-10">
+        <span className="mx-auto grid size-14 place-items-center rounded-2xl bg-emerald-50 text-emerald-700">
+          <CheckCircle2 className="size-7" />
+        </span>
+        <p className="eyebrow mt-5">Тренировка завершена</p>
+        <h1 className="mt-2 text-2xl font-semibold">
+          Камера и микрофон работают
+        </h1>
+        <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+          Тренировочные записи удалены. Настоящее интервью ещё не началось, его
+          таймер не запущен.
+        </p>
+        <div className="mt-6 flex flex-col justify-center gap-3 sm:flex-row">
+          <Button variant="outline" onClick={onBack}>
+            Вернуться к подготовке
+          </Button>
+          <Button onClick={onRealInterview}>
+            Перейти к согласию и старту
+            <ArrowRight data-icon="inline-end" />
+          </Button>
+        </div>
+      </section>
     </main>
   );
 }
@@ -1372,6 +1720,10 @@ export function CandidateApp({
   );
   const [stream, setStream] = useState<MediaStream | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const [practiceSet, setPracticeSet] = useState<PracticeSet | null>(null);
+  const [practiceLoading, setPracticeLoading] = useState(false);
+  const [practiceError, setPracticeError] = useState('');
+  const practiceRequestRef = useRef<AbortController | null>(null);
   const [outcome, setOutcome] = useState<CandidateOutcome | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -1453,6 +1805,54 @@ export function CandidateApp({
     () => () => streamRef.current?.getTracks().forEach((track) => track.stop()),
     [],
   );
+
+  useEffect(() => {
+    return () => practiceRequestRef.current?.abort();
+  }, [view, candidateId, briefing?.interviewId]);
+
+  const loadPracticeSet = async () => {
+    if (!briefing || briefing.status !== 'ready' || practiceLoading)
+      return null;
+    const controller = new AbortController();
+    practiceRequestRef.current = controller;
+    setPracticeLoading(true);
+    setPracticeError('');
+    try {
+      const generated = await api.createPracticeSet(
+        briefing.interviewId,
+        controller.signal,
+      );
+      if (controller.signal.aborted) return null;
+      setPracticeSet(generated);
+      return generated;
+    } catch (caught) {
+      if (controller.signal.aborted) return null;
+      const message = errorText(caught);
+      setPracticeError(message);
+      notify(message);
+      return null;
+    } finally {
+      setPracticeLoading(false);
+    }
+  };
+
+  const openPractice = async () => {
+    const available = practiceSet || (await loadPracticeSet());
+    if (available) setView('practice_preflight');
+  };
+
+  const startPractice = (media: MediaStream) => {
+    streamRef.current = media;
+    setStream(media);
+    setView('practice_interview');
+  };
+
+  const leavePractice = (nextView: CandidateView) => {
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    setStream(null);
+    setView(nextView);
+  };
 
   const startInterview = async (media: MediaStream) => {
     if (!briefing) return;
@@ -1562,6 +1962,30 @@ export function CandidateApp({
         onTerminalError={stopAfterTerminalError}
       />
     );
+  if (view === 'practice_interview' && practiceSet && stream)
+    return (
+      <PracticeRoom
+        practiceSet={practiceSet}
+        stream={stream}
+        onComplete={() => leavePractice('practice_complete')}
+        onBack={() => leavePractice('preparation')}
+      />
+    );
+  if (view === 'practice_complete')
+    return (
+      <PracticeComplete
+        onBack={() => setView('preparation')}
+        onRealInterview={() => setView('preparation')}
+      />
+    );
+  if (view === 'practice_preflight' && briefing)
+    return (
+      <Preflight
+        practice
+        onBack={() => setView('preparation')}
+        onReady={startPractice}
+      />
+    );
   if (view === 'preflight' && briefing)
     return (
       <>
@@ -1580,8 +2004,13 @@ export function CandidateApp({
     return (
       <Preparation
         briefing={briefing}
+        practiceSet={practiceSet}
+        practiceLoading={practiceLoading}
+        practiceError={practiceError}
         onBack={() => setView('home')}
         onContinue={() => setView('preflight')}
+        onLoadExamples={() => void loadPracticeSet()}
+        onPractice={() => void openPractice()}
       />
     );
   return (

@@ -35,6 +35,9 @@ The `/api/v1` workflow covers:
 - positions with vacancy uploads and interview constraints (`/positions`);
 - resume upload and generated question drafts (`/positions/{id}/candidates`);
 - question editing, approval and candidate invite URLs;
+- isolated practice-question sets that use only a broad role family and never
+  receive the vacancy text, resume, requirements, seed questions or real
+  interview questions;
 - candidate briefing, consent, TTS, answer media upload, STT and adaptive
   follow-up questions;
 - interview completion and structured analysis;

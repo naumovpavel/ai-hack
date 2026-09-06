@@ -19,6 +19,7 @@ from interview_api.workflow.ai import (
     AnalysisDraft,
     DeterministicWorkflowAI,
     FollowUpProposal,
+    PracticeQuestionProposal,
     TranscriptWord,
     WorkflowTranscript,
 )
@@ -84,6 +85,52 @@ class FailOnceAnalysisAI(FollowUpWorkflowAI):
             requirements=requirements,
             questions_and_answers=questions_and_answers,
         )
+
+
+class PracticeIsolationAI(FollowUpWorkflowAI):
+    def __init__(self) -> None:
+        super().__init__()
+        self.practice_calls: list[dict[str, object]] = []
+
+    async def generate_practice_questions(
+        self,
+        *,
+        role_family: str,
+        level_band: str,
+        question_count: int,
+        language: str,
+    ) -> list[PracticeQuestionProposal]:
+        self.practice_calls.append(
+            {
+                "role_family": role_family,
+                "level_band": level_band,
+                "question_count": question_count,
+                "language": language,
+            }
+        )
+        if len(self.practice_calls) == 1:
+            return [
+                PracticeQuestionProposal(
+                    text="Расскажите о сложном Python-сервисе.",
+                    topic="Небезопасное совпадение",
+                ),
+                PracticeQuestionProposal(text="Безопасный вопрос один.", topic="Практика"),
+                PracticeQuestionProposal(text="Безопасный вопрос два.", topic="Практика"),
+            ]
+        return [
+            PracticeQuestionProposal(
+                text="Как бы вы начали разбирать вымышленную задачу с неполными данными?",
+                topic="Разбор ситуации",
+            ),
+            PracticeQuestionProposal(
+                text="Как в учебном кейсе сравнить два разумных подхода?",
+                topic="Принятие решений",
+            ),
+            PracticeQuestionProposal(
+                text="Что вы измените, если первый эксперимент не подтвердит гипотезу?",
+                topic="Рефлексия",
+            ),
+        ]
 
 
 class FailOnceVideoStorage(MemoryObjectStorage):
@@ -349,6 +396,132 @@ def test_briefing_reports_when_follow_ups_are_disabled(
 
     assert briefing.status_code == 200
     assert briefing.json()["allowsFollowUps"] is False
+
+
+def test_practice_questions_are_isolated_and_do_not_start_interview(
+    workflow_client: tuple[TestClient, WorkflowService, MutableClock],
+) -> None:
+    client, service, _clock = workflow_client
+    practice_ai = PracticeIsolationAI()
+    service.ai = practice_ai
+    _position_id, candidate_id, real_questions = _create_hr_position_and_candidate(client)
+    approval = client.post(f"/api/v1/candidates/{candidate_id}/questions/approve").json()
+    _sign_in_telegram(client, service)
+    assert client.post(
+        "/api/v1/invites/resolve", json={"token": approval["inviteToken"]}
+    ).status_code == 200
+    interview_id = approval["interviewId"]
+
+    before = client.get(f"/api/v1/interviews/{interview_id}/state").json()
+    response = client.post(f"/api/v1/interviews/{interview_id}/practice")
+    after = client.get(f"/api/v1/interviews/{interview_id}/state").json()
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["mode"] == "practice"
+    assert payload["localOnly"] is True
+    assert len(payload["questions"]) == 3
+    assert all(item["id"].startswith("practice-") for item in payload["questions"])
+    assert {item["text"] for item in payload["questions"]}.isdisjoint(
+        {item["text"] for item in real_questions}
+    )
+    assert len(practice_ai.practice_calls) == 2
+    assert set(practice_ai.practice_calls[0]) == {
+        "role_family",
+        "level_band",
+        "question_count",
+        "language",
+    }
+    assert before == after
+    assert after["status"] == "ready"
+    assert after["startedAt"] is None
+    assert after["deadlineAt"] is None
+
+    repeated = client.post(f"/api/v1/interviews/{interview_id}/practice")
+    assert repeated.json() == payload
+    assert len(practice_ai.practice_calls) == 2
+
+    started = client.post(
+        f"/api/v1/interviews/{interview_id}/start",
+        json={"consentToRecording": True},
+    )
+    assert started.status_code == 200
+    assert client.post(f"/api/v1/interviews/{interview_id}/practice").status_code == 409
+
+
+def test_practice_requires_the_invited_candidate(workflow_client):
+    client, service, _ = workflow_client
+    _, candidate_id, _ = _create_hr_position_and_candidate(client)
+    approval = client.post(f"/api/v1/candidates/{candidate_id}/questions/approve").json()
+    path = f"/api/v1/interviews/{approval['interviewId']}/practice"
+    assert client.post(path).status_code == 403  # HR cannot rehearse as a candidate.
+    client.cookies.clear()
+    assert client.post(path).status_code == 401
+    _, other_id, _ = _create_hr_position_and_candidate(client)
+    other = client.post(f"/api/v1/candidates/{other_id}/questions/approve").json()
+    _sign_in_telegram(client, service, telegram_id=2002)
+    assert client.post(
+        "/api/v1/invites/resolve", json={"token": other["inviteToken"]}
+    ).status_code == 200
+    assert client.post(path).status_code == 403
+
+
+@pytest.mark.parametrize("failure", ["unavailable", "overlap"])
+def test_practice_fallback_preserves_real_questions(workflow_client, monkeypatch, failure):
+    client, service, _ = workflow_client
+    _, candidate_id, real_questions = _create_hr_position_and_candidate(client)
+    approval = client.post(f"/api/v1/candidates/{candidate_id}/questions/approve").json()
+    _sign_in_telegram(client, service)
+    client.post("/api/v1/invites/resolve", json={"token": approval["inviteToken"]})
+
+    async def failed_generation(**kwargs):
+        if failure == "unavailable":
+            raise WorkflowProviderError("Unavailable")
+        return [PracticeQuestionProposal(text=real_questions[0]["text"], topic="Overlap")] * 3
+
+    monkeypatch.setattr(service.ai, "generate_practice_questions", failed_generation)
+    path = f"/api/v1/interviews/{approval['interviewId']}"
+    before = client.get(f"{path}/state").json()
+    response = client.post(f"{path}/practice")
+    assert response.status_code == 200, response.text
+    assert len(response.json()["questions"]) == 3
+    assert client.get(f"{path}/state").json() == before
+    assert all(
+        not service._questions_are_too_similar(practice["text"], real["text"])
+        for practice in response.json()["questions"] for real in real_questions
+    )
+
+
+def test_practice_generation_finishing_after_real_start_is_rejected(workflow_client, monkeypatch):
+    client, service, _ = workflow_client
+    _, candidate_id, _ = _create_hr_position_and_candidate(client)
+    approval = client.post(f"/api/v1/candidates/{candidate_id}/questions/approve").json()
+    interview_id = approval["interviewId"]
+    _sign_in_telegram(client, service)
+    client.post("/api/v1/invites/resolve", json={"token": approval["inviteToken"]})
+    generate = service.ai.generate_practice_questions
+
+    async def start_while_generating(**kwargs):
+        await service.repository.set_interview_status(interview_id, "in_progress")
+        return await generate(**kwargs)
+
+    monkeypatch.setattr(service.ai, "generate_practice_questions", start_while_generating)
+    assert client.post(f"/api/v1/interviews/{interview_id}/practice").status_code == 409
+    assert interview_id not in service._practice_sets
+
+
+@pytest.mark.parametrize("status", ["in_progress", "analyzing", "completed", "error"])
+def test_practice_rejects_non_ready_interviews_even_with_cached_examples(workflow_client, status):
+    client, service, _ = workflow_client
+    _, candidate_id, _ = _create_hr_position_and_candidate(client)
+    approval = client.post(f"/api/v1/candidates/{candidate_id}/questions/approve").json()
+    interview_id = approval["interviewId"]
+    _sign_in_telegram(client, service)
+    client.post("/api/v1/invites/resolve", json={"token": approval["inviteToken"]})
+    path = f"/api/v1/interviews/{interview_id}/practice"
+    assert client.post(path).status_code == 200
+    asyncio.run(service.repository.set_interview_status(interview_id, status))
+    assert client.post(path).status_code == 409
 
 
 def test_answer_finishing_at_deadline_is_saved_and_ends_interview(
@@ -862,3 +1035,76 @@ def test_question_ratings_cannot_use_another_candidates_question(
     _sign_in_telegram(client, service)
     assert client.post("/api/v1/invites/resolve", json={"token": token}).status_code == 200
     assert client.put(question_path, json={"rating": "positive"}).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_openrouter_practice_prompt_receives_only_coarse_profile() -> None:
+    model_payload = {
+        "model": "chat-model",
+        "provider": "test",
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "questions": [
+                                {
+                                    "text": "Как вы начнёте разбирать учебную ситуацию?",
+                                    "topic": "Разбор ситуации",
+                                    "answerSeconds": 60,
+                                }
+                            ]
+                        },
+                        ensure_ascii=False,
+                    )
+                }
+            }
+        ],
+    }
+    pool = FakeAudioPool([FakeAudioResponse(json.dumps(model_payload).encode())])
+    gateway = OpenRouterWorkflowAI(
+        api_key="test-key",
+        chat_model="chat-model",
+        stt_model="stt-model",
+        tts_model="tts-model",
+        pool=pool,  # type: ignore[arg-type]
+    )
+
+    questions = await gateway.generate_practice_questions(
+        role_family="backend",
+        level_band="middle",
+        question_count=1,
+        language="ru",
+    )
+
+    assert questions[0].text.startswith("Как вы")
+    _url, body, _headers = pool.requests[0]
+    request_payload = json.loads(body)
+    user_payload = json.loads(request_payload["messages"][1]["content"])
+    assert set(user_payload) == {"roleFamily", "levelBand", "questionCount", "language"}
+    serialized = json.dumps(user_payload, ensure_ascii=False).casefold()
+    assert all(
+        forbidden not in serialized
+        for forbidden in ("vacancy", "resume", "requirements", "seedquestions")
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("questions", [
+    None, 5, {}, [], [None],
+    [{"text": None, "topic": "Practice", "answerSeconds": 60}],
+    [{"text": "Question", "topic": None, "answerSeconds": 60}],
+    [{"text": "Question", "topic": "Practice", "answerSeconds": "oops"}],
+    [{"text": "Question", "topic": "Practice", "answerSeconds": None}],
+    [{"text": "Question", "topic": "Practice", "answerSeconds": True}],
+])
+async def test_invalid_practice_output_raises_provider_error(questions):
+    response = {"choices": [{"message": {"content": json.dumps({"questions": questions})}}]}
+    pool = FakeAudioPool([FakeAudioResponse(json.dumps(response).encode())])
+    gateway = OpenRouterWorkflowAI(
+        api_key="test-key", chat_model="chat-model", stt_model="stt", tts_model="tts", pool=pool,
+    )
+    with pytest.raises(WorkflowProviderError):
+        await gateway.generate_practice_questions(
+            role_family="general", level_band="middle", question_count=1, language="ru",
+        )
