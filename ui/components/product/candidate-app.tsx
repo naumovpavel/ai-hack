@@ -273,8 +273,8 @@ function CandidateHome({
               interviewUnavailable
                 ? 'bg-rose-50 text-rose-700'
                 : interviewFinished
-                  ? 'bg-violet-50 text-violet-700'
-                  : 'bg-blue-50 text-blue-700'
+                  ? 'bg-secondary text-secondary-foreground'
+                  : 'bg-accent text-accent-foreground'
             }
           >
             {interviewUnavailable
@@ -290,7 +290,7 @@ function CandidateHome({
       ) : (
         <section className="surface-card mt-8 p-7 text-center">
           {loading ? (
-            <LoaderCircle className="mx-auto size-6 animate-spin text-primary" />
+            <LoaderCircle className="mx-auto size-6 animate-spin text-accent-foreground" />
           ) : (
             <BriefcaseBusiness className="mx-auto size-6 text-muted-foreground" />
           )}
@@ -389,7 +389,7 @@ function Preparation({
                 const StepIcon = Icon as typeof Volume2;
                 return (
                   <article className="process-step" key={String(title)}>
-                    <StepIcon className="size-5 text-primary" />
+                    <StepIcon className="size-5 text-accent-foreground" />
                     <h3>{String(title)}</h3>
                     <p>{String(text)}</p>
                   </article>
@@ -483,7 +483,7 @@ function Preparation({
 
           <section className="surface-card mt-4 p-5 sm:p-6">
             <div className="flex items-start gap-3">
-              <ShieldCheck className="mt-0.5 size-5 shrink-0 text-primary" />
+              <ShieldCheck className="mt-0.5 size-5 shrink-0 text-accent-foreground" />
               <div>
                 <h2 className="font-semibold">Как AI оценивает ответы</h2>
                 <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
@@ -505,7 +505,7 @@ function Preparation({
         <aside className="lg:pt-10">
           <div className="surface-card sticky top-24 p-5 sm:p-6">
             <div className="flex items-center gap-3">
-              <LockKeyhole className="size-5 text-primary" />
+              <LockKeyhole className="size-5 text-accent-foreground" />
               <div>
                 <h2 className="font-semibold">Согласие на запись</h2>
                 <p className="text-xs text-muted-foreground">
@@ -1166,7 +1166,7 @@ function IntegrityCaptureNotice({
         </>
       ) : (
         <p className="flex items-center gap-2">
-          <ShieldCheck className="size-4 text-primary" />
+          <ShieldCheck className="size-4 text-accent-foreground" />
           Камера, микрофон и весь экран записываются непрерывно.
         </p>
       )}
@@ -1845,7 +1845,7 @@ function InterviewRoom({
             <Badge
               className={
                 question.kind === 'follow_up'
-                  ? 'bg-violet-50 text-violet-700'
+                  ? 'bg-secondary text-secondary-foreground'
                   : 'bg-muted text-foreground'
               }
             >
@@ -1913,7 +1913,7 @@ function InterviewRoom({
                   : phase === 'voice-error'
                     ? 'Озвучка недоступна'
                     : phase === 'asking'
-                      ? 'Signal озвучивает вопрос'
+                      ? 'Slopy озвучивает вопрос'
                       : phase === 'answering'
                         ? `Говорите. Нажмите на микрофон, когда закончите. Автосохранение через ${formatTimer(MAX_ANSWER_SECONDS - answerSeconds)}.`
                         : phase === 'uploading'
@@ -2055,7 +2055,7 @@ function Processing({
             : 'Команда оценит ответы и примет решение. Эта страница обновится автоматически.'}
         </p>
         {outcome?.status === 'pending' ? (
-          <Badge className="mt-5 bg-blue-50 text-blue-700">
+          <Badge className="mt-5 bg-accent text-accent-foreground">
             Решение ожидается
           </Badge>
         ) : null}

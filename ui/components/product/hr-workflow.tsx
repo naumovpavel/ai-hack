@@ -138,7 +138,7 @@ function Busy({
     >
       <div>
         <LoaderCircle
-          className="mx-auto size-8 animate-spin text-primary"
+          className="mx-auto size-8 animate-spin text-accent-foreground"
           aria-hidden="true"
         />
         <h2 className="mt-5 font-semibold">{title}</h2>
@@ -292,7 +292,7 @@ function FilePicker({
   const [error, setError] = useState('');
   return (
     <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-primary/25 bg-primary/[0.025] px-6 py-12 text-center">
-      <span className="mb-5 flex size-14 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+      <span className="mb-5 flex size-14 items-center justify-center rounded-2xl bg-primary/10 text-accent-foreground">
         <Upload className="size-6" />
       </span>
       <Button
@@ -507,7 +507,7 @@ function QuestionsEditor({
       {questions.map((question, index) => (
         <div key={index} className="rounded-2xl border bg-background p-4">
           <div className="flex items-start gap-3">
-            <span className="mt-2 flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+            <span className="mt-2 flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-accent-foreground">
               {index + 1}
             </span>
             <div className="min-w-0 flex-1">
@@ -628,17 +628,17 @@ function candidateStatus(candidate: CandidateSummary) {
   )
     return ['Нужно решение', 'bg-amber-50 text-amber-800'];
   if (candidate.processingStatus === 'invited')
-    return ['Приглашён', 'bg-blue-50 text-blue-700'];
+    return ['Приглашён', 'bg-accent text-accent-foreground'];
   if (candidate.processingStatus === 'in_progress')
-    return ['Проходит интервью', 'bg-blue-50 text-blue-700'];
+    return ['Проходит интервью', 'bg-accent text-accent-foreground'];
   if (
     candidate.processingStatus === 'questions_draft' ||
     candidate.processingStatus === 'not_started'
   )
-    return ['Черновик', 'bg-violet-50 text-violet-700'];
+    return ['Черновик', 'bg-secondary text-secondary-foreground'];
   if (candidate.processingStatus === 'error')
     return ['Ошибка обработки', 'bg-rose-50 text-rose-700'];
-  return ['Обрабатывается', 'bg-violet-50 text-violet-700'];
+  return ['Обрабатывается', 'bg-secondary text-secondary-foreground'];
 }
 function CandidateRows({
   candidates,
@@ -742,7 +742,7 @@ function VacanciesPage({ navigate }: { navigate: (view: View) => void }) {
                     navigate({ type: 'vacancy', vacancyId: vacancy.id })
                   }
                 >
-                  <span className="flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                  <span className="flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-accent-foreground">
                     <BriefcaseBusiness className="size-5" />
                   </span>
                   <span className="min-w-[160px] flex-1">
@@ -850,7 +850,7 @@ function CompanyContextPage({ notify }: { notify: Notify }) {
                 <FileText className="mt-0.5 size-4 text-rose-600" />
               ) : (
                 <LoaderCircle
-                  className={`mt-0.5 size-4 text-primary ${upload.state === 'processing' ? 'animate-spin' : ''}`}
+                  className={`mt-0.5 size-4 text-accent-foreground ${upload.state === 'processing' ? 'animate-spin' : ''}`}
                 />
               )}
               <div className="min-w-0">
@@ -886,7 +886,7 @@ function CompanyContextPage({ notify }: { notify: Notify }) {
           {resource.data.map((document: ContextDocument) => (
             <details key={document.id} className="surface-card group p-5">
               <summary className="flex cursor-pointer list-none items-center gap-3">
-                <FileText className="size-5 shrink-0 text-primary" />
+                <FileText className="size-5 shrink-0 text-accent-foreground" />
                 <span className="min-w-0 flex-1 break-words text-sm font-semibold">
                   {document.filename}
                 </span>
@@ -1022,7 +1022,7 @@ function VacancyTemplatesPage({
                   {template.role}
                 </span>
                 {template.adapted ? (
-                  <span className="ml-auto flex items-center gap-1 text-xs text-primary">
+                  <span className="ml-auto flex items-center gap-1 text-xs text-accent-foreground">
                     <Sparkles className="size-3" />
                     Для компании
                   </span>
@@ -1166,7 +1166,7 @@ function InterviewTemplatesPage({ notify }: { notify: Notify }) {
             <article key={template.id} className="surface-card p-6">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
-                  <div className="mb-3 flex items-center gap-2 text-primary">
+                  <div className="mb-3 flex items-center gap-2 text-accent-foreground">
                     <MessageSquare className="size-5" />
                     {template.adapted ? (
                       <span className="text-xs font-medium">
@@ -1196,7 +1196,7 @@ function InterviewTemplatesPage({ notify }: { notify: Notify }) {
               <ul className="grid gap-3 sm:grid-cols-2">
                 {template.evaluates.map((item, index) => (
                   <li key={index} className="flex gap-2 text-sm">
-                    <Check className="mt-0.5 size-4 shrink-0 text-primary" />
+                    <Check className="mt-0.5 size-4 shrink-0 text-accent-foreground" />
                     {item}
                   </li>
                 ))}
@@ -1471,7 +1471,7 @@ function CreateVacancyPage({
         <form className="space-y-5" onSubmit={create}>
           <section className="surface-card p-5 sm:p-6">
             <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2 text-sm font-semibold text-primary">
+              <div className="flex items-center gap-2 text-sm font-semibold text-accent-foreground">
                 <Sparkles className="size-4" />
                 {mode === 'upload'
                   ? 'Описание готово к проверке'
@@ -1620,7 +1620,7 @@ function VacancyOverview({
                   className="flex gap-2 text-sm leading-relaxed text-muted-foreground"
                   key={index}
                 >
-                  <Check className="mt-1 size-4 shrink-0 text-primary" />
+                  <Check className="mt-1 size-4 shrink-0 text-accent-foreground" />
                   {requirement}
                 </li>
               ))}
@@ -1655,7 +1655,7 @@ function VacancyOverview({
                   })
                 }
               >
-                <span className="flex size-11 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                <span className="flex size-11 items-center justify-center rounded-2xl bg-primary/10 text-accent-foreground">
                   <MessageSquare className="size-5" />
                 </span>
                 <span className="min-w-[180px] flex-1">
@@ -1739,7 +1739,7 @@ function TemplateSummary({
       <ul className="grid gap-3 sm:grid-cols-2">
         {template.evaluates.map((item, index) => (
           <li key={index} className="flex gap-2 text-sm">
-            <Check className="mt-0.5 size-4 shrink-0 text-primary" />
+            <Check className="mt-0.5 size-4 shrink-0 text-accent-foreground" />
             {item}
           </li>
         ))}
@@ -2562,7 +2562,7 @@ export function HrApp({ notify }: { notify: Notify }) {
             <button
               key={type}
               aria-current={mainGroup === type ? 'page' : undefined}
-              className={mainGroup === type ? 'text-primary' : ''}
+              className={mainGroup === type ? 'text-accent-foreground' : ''}
               onClick={() => navigate({ type })}
             >
               <Icon />

@@ -69,23 +69,23 @@ function statusCopy(status: ProcessingStatus, decision: HiringDecision) {
   if (status === 'invited')
     return {
       label: 'Приглашение готово',
-      className: 'bg-blue-50 text-blue-700',
+      className: 'bg-accent text-accent-foreground',
     };
   if (status === 'in_progress')
     return {
       label: 'Интервью идёт',
-      className: 'bg-blue-50 text-blue-700',
+      className: 'bg-accent text-accent-foreground',
     };
   if (status === 'not_started' || status === 'questions_draft')
     return {
       label: 'Согласовать вопросы',
-      className: 'bg-violet-50 text-violet-700',
+      className: 'bg-secondary text-secondary-foreground',
     };
   if (status === 'error')
     return { label: 'Ошибка обработки', className: 'bg-rose-50 text-rose-700' };
   return {
     label: 'AI обрабатывает',
-    className: 'bg-violet-50 text-violet-700',
+    className: 'bg-secondary text-secondary-foreground',
   };
 }
 
@@ -113,7 +113,7 @@ function Busy({ label = 'Загружаем…' }: { label?: string }) {
     >
       <div>
         <LoaderCircle
-          className="mx-auto size-7 animate-spin text-primary"
+          className="mx-auto size-7 animate-spin text-accent-foreground"
           aria-hidden="true"
         />
         <p className="mt-3 text-sm text-muted-foreground">{label}</p>
@@ -252,8 +252,8 @@ function QuestionApproval({
                   <Badge
                     className={
                       question.kind === 'provided'
-                        ? 'bg-blue-50 text-blue-700'
-                        : 'bg-violet-50 text-violet-700'
+                        ? 'bg-accent text-accent-foreground'
+                        : 'bg-secondary text-secondary-foreground'
                     }
                   >
                     {question.kind === 'provided' ? 'Общий пул' : 'AI'}
@@ -508,7 +508,7 @@ export function CandidateWorkspace({
         <QuestionApproval candidate={candidate} notify={notify} />
       ) : (
         <section className="surface-card p-8 text-center">
-          <LoaderCircle className="mx-auto size-7 animate-spin text-primary" />
+          <LoaderCircle className="mx-auto size-7 animate-spin text-accent-foreground" />
           <h2 className="mt-4 font-semibold">Интервью обрабатывается</h2>
           <p className="mt-2 text-sm text-muted-foreground">
             Транскрипт, медиа и анализ появятся здесь после завершения pipeline.

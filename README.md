@@ -74,6 +74,47 @@ Configure the bot and sign in through Telegram before using either workspace.
 See [TELEGRAM.md](TELEGRAM.md) for setup, role switching, invitations and notifications.
 The demo user switcher is disabled by default.
 
+## Candidate trust research
+
+`/research` is a public survey: no Telegram login or invitation is required.
+Participants complete the baseline, view five demonstration steps, then answer
+the same trust/readiness questions again using Yes/No answers.
+Past interview experience and reasons are collected before the examples; solution
+impressions are collected afterward. Reasons branch on each Yes/No answer, with
+the same options before and after, plus free text; at least one option or a written answer
+is required. Selected reason codes and free text are stored/exported separately.
+The baseline is immutable before examples
+are shown. Repeated submissions are idempotent, and progress resumes in the same
+browser using a random token; only its hash is stored in the database.
+
+`/research/results` and the CSV export require a verified Telegram session whose
+username is `wift657` (case-insensitive), regardless of the active product role.
+Other HR users cannot access research results. No respondent account identities
+are linked to the research records. The additive `workflow_research_responses`
+table is created on API startup using the existing PostgreSQL/SQLite repository.
+
+The dashboard compares the same completed pairs: Yes percentages before/after,
+the difference in percentage points, and all four Yes/No transitions. Reasons
+are counted within each answer branch with explicit denominators. Incomplete
+surveys are excluded from paired metrics but remain in the funnel and CSV.
+Version `signal-v2` is separate from the old 0–10 instrument. The current demo
+`signal-demo-v2` covers preparation, a private mock interview, evidence-based
+analysis, independent HR decisions, and required feedback. Old instruments and
+earlier demo responses stay in the database and CSV and never enter current metrics.
+The rationale and source
+mapping are in [backend/docs/research.md](backend/docs/research.md).
+The measured change is observational, not proof of a causal product effect.
+
+Deploy the UI and API together using the existing Compose stack. Publishing the
+UI alone on Sites does not deploy these Python API routes or their database.
+After deployment, share the site's `/research` URL with participants.
+
+Run focused checks with:
+
+```sh
+backend/.venv/bin/python -m pytest backend/tests/api/test_research.py -q
+```
+
 ## Manual end-to-end scenario
 
 1. Open **Общий контекст** and upload the company's competency framework or other

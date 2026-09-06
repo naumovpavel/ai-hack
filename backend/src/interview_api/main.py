@@ -39,6 +39,7 @@ from interview_api.workflow.integrity_service import IntegrityService
 from interview_api.workflow.integrity_worker import IntegrityWorker
 from interview_api.workflow.openrouter import OpenRouterWorkflowAI
 from interview_api.workflow.repository import SqlAlchemyWorkflowRepository
+from interview_api.workflow.research import router as research_router
 from interview_api.workflow.service import WorkflowService
 from interview_api.workflow.storage import S3ObjectStorage
 from interview_api.workflow.telegram_routes import router as telegram_router
@@ -322,6 +323,7 @@ def create_app(
     app.include_router(transcriptions_router)
     app.include_router(workflow_router)
     app.include_router(practice_router)
+    app.include_router(research_router)
     app.include_router(deletion_router)
     app.include_router(telegram_router)
     app.include_router(integrity_router)

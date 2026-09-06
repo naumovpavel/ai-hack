@@ -125,7 +125,7 @@ export function PracticeReview({
             </>
           ) : (
             <>
-              <LoaderCircle className="mx-auto size-8 animate-spin text-primary" />
+              <LoaderCircle className="mx-auto size-8 animate-spin text-accent-foreground" />
               <h2 className="mt-4 font-semibold">Готовим разбор тренировки</h2>
               <p className="mx-auto mt-2 max-w-lg text-sm text-muted-foreground">
                 Ответы сохранены. Камера и микрофон выключены. Можно вернуться к

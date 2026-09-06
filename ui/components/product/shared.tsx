@@ -1,13 +1,17 @@
+import Image from 'next/image';
+
 export function Brand() {
   return (
-    <div className="flex items-center gap-3">
-      <div className="brand-mark" aria-hidden="true">
-        <span />
-        <span />
-      </div>
-      <span className="text-[17px] font-semibold tracking-[-0.02em]">
-        Signal
-      </span>
+    <div className="brand flex min-h-11 items-center gap-2.5">
+      <Image
+        className="brand-mark"
+        src="/slopy-logo.jpg"
+        alt=""
+        width={34}
+        height={34}
+        unoptimized
+      />
+      <span className="brand-name">Slopy</span>
     </div>
   );
 }

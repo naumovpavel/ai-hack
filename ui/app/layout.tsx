@@ -3,24 +3,28 @@ import './globals.css';
 
 export const metadata: Metadata = {
   metadataBase: new URL(
-    'https://signal-hiring-demo.salty-gecko-5939.chatgpt.site',
+    'https://signal-hiring-demo.wiftwift.chatgpt.site',
   ),
   referrer: 'no-referrer',
-  title: 'Signal — доказательные AI-интервью',
+  icons: {
+    icon: { url: '/slopy-logo.jpg', type: 'image/jpeg' },
+    apple: '/slopy-logo.jpg',
+  },
+  title: 'Slopy — доказательные AI-интервью',
   description:
     'Сквозной процесс найма: настройка интервью, прохождение и проверяемая AI-оценка.',
   openGraph: {
-    title: 'Signal — доказательные AI-интервью',
+    title: 'Slopy — доказательные AI-интервью',
     description:
       'Вопрос, ответ, evidence и человеческое решение — в одном процессе.',
-    images: [{ url: '/og.png', width: 1200, height: 630, alt: 'Signal' }],
+    images: [{ url: '/slopy-logo.jpg', width: 512, height: 512, alt: 'Slopy' }],
   },
   twitter: {
-    card: 'summary_large_image',
-    title: 'Signal — доказательные AI-интервью',
+    card: 'summary',
+    title: 'Slopy — доказательные AI-интервью',
     description:
       'Вопрос, ответ, evidence и человеческое решение — в одном процессе.',
-    images: ['/og.png'],
+    images: ['/slopy-logo.jpg'],
   },
 };
 

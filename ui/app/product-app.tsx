@@ -1,5 +1,7 @@
 'use client';
 
+import Link from 'next/link';
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, LoaderCircle, LogOut, Send } from 'lucide-react';
 import { CandidateApp } from '@/components/product/candidate-app';
@@ -240,9 +242,24 @@ export function AppShell() {
   };
 
   return (
-    <div className="min-h-dvh bg-background text-foreground">
-      <header className="topbar">
+    <div className={`min-h-dvh bg-background text-foreground ${!currentUser ? 'app-shell-guest' : ''}`}>
+      <header className="topbar flex-wrap gap-x-3 gap-y-1 py-2">
         <Brand />
+        <Link
+          href="/research"
+          className="inline-flex min-h-11 items-center text-sm text-muted-foreground hover:text-accent-foreground sm:ml-3"
+        >
+          Опрос об AI-интервью
+        </Link>
+        {currentUser?.telegramConnected &&
+          currentUser.telegramUsername?.toLowerCase() === 'wift657' && (
+            <Link
+              href="/research/results"
+              className="inline-flex min-h-11 items-center text-sm text-muted-foreground hover:text-accent-foreground"
+            >
+              Результаты опроса
+            </Link>
+          )}
         {currentUser ? (
           <DropdownMenu>
             <DropdownMenuTrigger
@@ -306,11 +323,11 @@ export function AppShell() {
       ) : !currentUser ? (
         <main className="grid min-h-[calc(100dvh-68px)] place-items-center px-5 py-12">
           <section className="surface-card w-full max-w-md p-7 sm:p-10">
-            <span className="grid size-12 place-items-center rounded-2xl bg-primary/10 text-primary">
+            <span className="grid size-12 place-items-center rounded-2xl bg-primary/10 text-accent-foreground">
               <Send className="size-6" />
             </span>
             <h1 className="mt-6 text-2xl font-semibold">
-              {inviteToken ? 'Войдите, чтобы пройти интервью' : 'Вход в Signal'}
+              {inviteToken ? 'Войдите, чтобы пройти интервью' : 'Вход в Slopy'}
             </h1>
             <p className="mt-3 text-base leading-relaxed text-muted-foreground">
               {login

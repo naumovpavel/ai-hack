@@ -252,7 +252,7 @@ export function IntegrityReview({ candidateId }: { candidateId: string }) {
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h3 className="flex items-center gap-2 font-semibold">
-          <ShieldCheck className="size-5 text-primary" />
+          <ShieldCheck className="size-5 text-accent-foreground" />
           Контроль записи и спорные эпизоды
         </h3>
         <Button

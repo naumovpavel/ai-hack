@@ -153,7 +153,7 @@ export function AnswerEvidence({
             </div>
           </div>
           <div className="flex items-center gap-2 text-sm font-semibold">
-            <Sparkles className="size-4 text-primary" aria-hidden="true" />
+            <Sparkles className="size-4 text-accent-foreground" aria-hidden="true" />
             Аргументация ИИ по ответу
           </div>
           {!items.length ? (

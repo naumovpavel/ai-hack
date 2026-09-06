@@ -279,7 +279,7 @@ export function HumanFirstReview({
             className={`flex min-w-0 items-center gap-2 text-sm ${step === index + 1 ? 'font-semibold text-foreground' : 'text-muted-foreground'}`}
           >
             <span
-              className={`grid size-7 shrink-0 place-items-center rounded-full text-sm ${step > index + 1 || review.finalDecision ? 'bg-primary/10 text-primary' : step === index + 1 ? 'bg-primary text-primary-foreground' : 'bg-muted'}`}
+              className={`grid size-7 shrink-0 place-items-center rounded-full text-sm ${step > index + 1 || review.finalDecision ? 'bg-primary/10 text-accent-foreground' : step === index + 1 ? 'bg-primary text-primary-foreground' : 'bg-muted'}`}
             >
               {step > index + 1 || review.finalDecision ? (
                 <Check className="size-4" aria-hidden="true" />
@@ -345,7 +345,7 @@ export function HumanFirstReview({
                     className={`mb-1 flex min-h-14 w-full gap-3 rounded-xl p-3 text-left focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-60 ${index === activeIndex ? 'bg-background shadow-sm ring-1 ring-border' : 'hover:bg-muted'}`}
                   >
                     <span
-                      className={`grid size-6 shrink-0 place-items-center rounded-full text-sm ${item.rating ? 'bg-primary/10 text-primary' : 'bg-background text-muted-foreground'}`}
+                      className={`grid size-6 shrink-0 place-items-center rounded-full text-sm ${item.rating ? 'bg-primary/10 text-accent-foreground' : 'bg-background text-muted-foreground'}`}
                     >
                       {item.rating ? (
                         <Check className="size-3.5" aria-hidden="true" />
@@ -657,7 +657,7 @@ export function HumanFirstReview({
             <div className="surface-card p-5 sm:p-6">
               <div className="flex items-center gap-2 text-sm font-medium">
                 <CheckCircle2
-                  className="size-4 text-primary"
+                  className="size-4 text-accent-foreground"
                   aria-hidden="true"
                 />
                 {practice
@@ -676,7 +676,7 @@ export function HumanFirstReview({
             </div>
             <div className="surface-card p-5 sm:p-6">
               <div className="flex items-center gap-2 text-sm font-medium">
-                <Sparkles className="size-4 text-primary" aria-hidden="true" />
+                <Sparkles className="size-4 text-accent-foreground" aria-hidden="true" />
                 Рекомендация ИИ
               </div>
               <p className="mt-4 text-2xl font-semibold">
@@ -844,7 +844,7 @@ export function HumanFirstReview({
             <div className="surface-card border-primary/30 p-5 sm:p-6">
               <div className="flex items-center gap-2">
                 <CheckCircle2
-                  className="size-5 text-primary"
+                  className="size-5 text-accent-foreground"
                   aria-hidden="true"
                 />
                 <h3 className="font-semibold">
