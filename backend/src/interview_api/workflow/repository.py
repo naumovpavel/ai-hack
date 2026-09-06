@@ -8,6 +8,7 @@ from sqlalchemy import delete, func, inspect, select, text, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from interview_api.workflow.ai import AnalysisDraft, QuestionProposal
+from interview_api.workflow.deletion_repository import DeletionRepositoryMixin
 from interview_api.workflow.entities import (
     AnalysisItemRow,
     AnalysisRow,
@@ -40,11 +41,27 @@ def new_id() -> str:
     return str(uuid4())
 
 
-class SqlAlchemyWorkflowRepository(TelegramRepositoryMixin):
+class SqlAlchemyWorkflowRepository(TelegramRepositoryMixin, DeletionRepositoryMixin):
     """Async repository shared by PostgreSQL production and SQLite API tests."""
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = session_factory
+
+    @staticmethod
+    async def _lock_candidate(session: AsyncSession, candidate_id: str) -> CandidateRow:
+        candidate = await session.get(CandidateRow, candidate_id, with_for_update=True)
+        if candidate is None:
+            raise WorkflowNotFoundError(details={"candidateId": candidate_id})
+        return candidate
+
+    @classmethod
+    async def _lock_interview_candidate(cls, session: AsyncSession, interview_id: str) -> None:
+        candidate_id = await session.scalar(
+            select(InterviewRow.candidate_id).where(InterviewRow.id == interview_id)
+        )
+        if candidate_id is None:
+            raise WorkflowNotFoundError(details={"interviewId": interview_id})
+        await cls._lock_candidate(session, candidate_id)
 
     @classmethod
     def from_engine(cls, engine: AsyncEngine) -> SqlAlchemyWorkflowRepository:
@@ -308,6 +325,7 @@ class SqlAlchemyWorkflowRepository(TelegramRepositoryMixin):
             for index, proposal in enumerate(proposals)
         ]
         async with self._sessions.begin() as session:
+            await self._lock_candidate(session, candidate_id)
             await session.execute(
                 delete(QuestionRow).where(QuestionRow.candidate_id == candidate_id)
             )
@@ -343,6 +361,7 @@ class SqlAlchemyWorkflowRepository(TelegramRepositoryMixin):
         order_index: int | None,
     ) -> QuestionRow:
         async with self._sessions.begin() as session:
+            await self._lock_candidate(session, candidate_id)
             rows = list(
                 await session.scalars(
                     select(QuestionRow)
@@ -378,6 +397,7 @@ class SqlAlchemyWorkflowRepository(TelegramRepositoryMixin):
 
     async def approve_questions(self, candidate_id: str) -> list[QuestionRow]:
         async with self._sessions.begin() as session:
+            await self._lock_candidate(session, candidate_id)
             rows = list(
                 await session.scalars(
                     select(QuestionRow)
@@ -404,6 +424,7 @@ class SqlAlchemyWorkflowRepository(TelegramRepositoryMixin):
         expires_at: datetime,
     ) -> tuple[InviteRow, InterviewRow]:
         async with self._sessions.begin() as session:
+            await self._lock_candidate(session, candidate_id)
             invite = await session.scalar(
                 select(InviteRow).where(InviteRow.candidate_id == candidate_id).with_for_update()
             )
@@ -479,6 +500,7 @@ class SqlAlchemyWorkflowRepository(TelegramRepositoryMixin):
         deadline_at: datetime,
     ) -> InterviewRow:
         async with self._sessions.begin() as session:
+            await self._lock_interview_candidate(session, interview_id)
             row = await session.get(InterviewRow, interview_id, with_for_update=True)
             if row is None:
                 raise WorkflowNotFoundError(details={"interviewId": interview_id})
@@ -548,6 +570,7 @@ class SqlAlchemyWorkflowRepository(TelegramRepositoryMixin):
         reason: str,
     ) -> QuestionRow:
         async with self._sessions.begin() as session:
+            await self._lock_candidate(session, candidate_id)
             rows = list(
                 await session.scalars(
                     select(QuestionRow)
@@ -605,6 +628,7 @@ class SqlAlchemyWorkflowRepository(TelegramRepositoryMixin):
         alignment_size_bytes: int | None = None,
     ) -> AnswerRow:
         async with self._sessions.begin() as session:
+            await self._lock_candidate(session, candidate_id)
             interview = await session.get(InterviewRow, interview_id, with_for_update=True)
             if interview is None:
                 raise WorkflowNotFoundError(details={"interviewId": interview_id})
@@ -739,6 +763,7 @@ class SqlAlchemyWorkflowRepository(TelegramRepositoryMixin):
         size_bytes: int,
     ) -> MediaAssetRow:
         async with self._sessions.begin() as session:
+            await self._lock_candidate(session, candidate_id)
             if answer_id is not None:
                 await session.get(AnswerRow, answer_id, with_for_update=True)
                 existing = await session.scalar(
@@ -802,6 +827,7 @@ class SqlAlchemyWorkflowRepository(TelegramRepositoryMixin):
         completed_at: datetime | None = None,
     ) -> InterviewRow:
         async with self._sessions.begin() as session:
+            await self._lock_interview_candidate(session, interview_id)
             row = await session.get(InterviewRow, interview_id, with_for_update=True)
             if row is None:
                 raise WorkflowNotFoundError(details={"interviewId": interview_id})
@@ -854,6 +880,7 @@ class SqlAlchemyWorkflowRepository(TelegramRepositoryMixin):
             for index, item in enumerate(draft.items)
         ]
         async with self._sessions.begin() as session:
+            await self._lock_candidate(session, candidate_id)
             old_ids = select(AnalysisItemRow.id).where(
                 AnalysisItemRow.analysis_id.in_(
                     select(AnalysisRow.id).where(AnalysisRow.candidate_id == candidate_id)
@@ -1042,6 +1069,12 @@ class SqlAlchemyWorkflowRepository(TelegramRepositoryMixin):
     async def save_hiring_resources(self, resources: list[HiringResourceRow]) -> None:
         async with self._sessions.begin() as session:
             for row in resources:
+                if row.kind == "interview_plan":
+                    position = await session.get(
+                        PositionRow, row.payload["vacancyId"], with_for_update=True
+                    )
+                    if position is None or position.created_by != row.created_by:
+                        raise WorkflowNotFoundError("Vacancy was not found.")
                 await session.merge(row)
 
     async def update_vacancy(self, position_id: str, changes: dict) -> PositionRow:
@@ -1072,6 +1105,13 @@ class SqlAlchemyWorkflowRepository(TelegramRepositoryMixin):
         proposals: Sequence[QuestionProposal],
     ) -> CandidateRow:
         async with self._sessions.begin() as session:
+            position = await session.get(
+                PositionRow, candidate_fields["position_id"], with_for_update=True
+            )
+            plan = await session.get(HiringResourceRow, candidate_fields["interview_plan_id"])
+            if (position is None or position.created_by != owner or plan is None
+                    or plan.kind != "interview_plan" or plan.created_by != owner):
+                raise WorkflowNotFoundError("Interview was not found.")
             draft = await session.scalar(
                 select(HiringResourceRow)
                 .where(

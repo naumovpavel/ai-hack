@@ -91,8 +91,12 @@ The demo user switcher is disabled by default.
    and the recruiter stays on the interview overview. Check the global candidate
    search and its vacancy/interview labels.
 6. Open the invite URL and sign in as the candidate. Inspect the practice
-   examples and try the optional mock interview. Confirm that leaving practice
-   keeps the real interview unstarted and sends no answer recordings to the server.
+   examples and try the optional mock interview. Topics are broad categories,
+   while practice questions cover those areas without repeating real questions.
+   With consent, practice recordings and their analysis are saved privately for
+   the candidate. Rate answers, record an initial assessment, reveal the AI
+   summary, and save a final preparation plan. Confirm that leaving practice
+   keeps the real interview unstarted and that HR cannot read practice results.
    Return to preparation, give consent, grant camera and microphone permissions,
    and complete the real interview. Questions are spoken through backend OpenRouter TTS; an
    explicit retry is offered if speech fails.
@@ -122,6 +126,17 @@ for compatibility with existing databases and are no longer used to allow decisi
 
 Use a short interview and small media samples for this smoke run. Model calls go
 through OpenRouter; PostgreSQL, MinIO, the API, and the UI stay local.
+
+HR can delete candidates, interview plans, and vacancies after reviewing the
+confirmation dialog. Deleting a parent removes its candidates, invitations,
+answers, analyses, and practice sessions; account identities are preserved.
+Only the owner can delete, and old invitation links stop working. File cleanup
+is attempted after the database transaction; shared vacancy sources are retained.
+
+Document uploads accept PDF, DOCX, and TXT up to 50 MiB (`MAX_DOCUMENT_BYTES`).
+Large vacancy PDFs use already-extracted text for model parsing, avoiding a
+second binary upload. Camera, microphone, and clipboard APIs require HTTPS on
+public origins; keep UI and API on one origin behind the deployment proxy.
 
 The scripts in `backend/scripts/seed_*.py` are fixtures for
 `interview_api.local_demo` only: they target its temporary SQLite database and

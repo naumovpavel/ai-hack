@@ -22,7 +22,9 @@ import type {
   CandidateDetail,
   CandidateMedia,
   Decision,
+  DecisionInput,
   HiringDecision,
+  InitialDecisionInput,
   QuestionRating,
 } from '@/lib/types';
 
@@ -31,6 +33,27 @@ const statusLabels: Record<Status, string> = {
   next_stage: 'Позвать дальше',
   rejected: 'Отказать',
 };
+const practiceStatusLabels: Record<Status, string> = {
+  next_stage: 'Готов к интервью',
+  rejected: 'Нужно ещё подготовиться',
+};
+
+export type ReviewActions = {
+  rate: (questionId: string, rating: QuestionRating) => Promise<Analysis>;
+  reveal: (decision: InitialDecisionInput) => Promise<Analysis>;
+  save: (decision: DecisionInput) => Promise<Decision>;
+};
+
+type HumanFirstReviewProps = {
+  candidate: Pick<CandidateDetail, 'id'>;
+  analysis: Analysis;
+  media: CandidateMedia | null;
+  notify: (message: string) => void;
+  onDecision: (decision: Decision) => void;
+} & (
+  | { mode: 'practice'; actions: ReviewActions }
+  | { mode?: 'hiring'; actions?: ReviewActions }
+);
 const ratings = [
   { value: 'positive', label: 'Достаточный ответ', icon: Check },
   { value: 'negative', label: 'Недостаточный ответ', icon: X },
@@ -43,15 +66,17 @@ function DecisionChoices({
   value,
   onChange,
   disabled,
+  practice,
 }: {
   value: Status | null;
   onChange: (value: Status) => void;
   disabled: boolean;
+  practice: boolean;
 }) {
   return (
     <fieldset disabled={disabled} className="grid gap-3 sm:grid-cols-2">
       <legend className="mb-3 text-sm font-medium">
-        Решение о следующем этапе
+        {practice ? 'Ваша готовность к интервью' : 'Решение о следующем этапе'}
       </legend>
       {(['next_stage', 'rejected'] as const).map((status) => (
         <label
@@ -66,7 +91,7 @@ function DecisionChoices({
             onChange={() => onChange(status)}
             className="size-4 accent-primary"
           />
-          {statusLabels[status]}
+          {(practice ? practiceStatusLabels : statusLabels)[status]}
         </label>
       ))}
     </fieldset>
@@ -79,13 +104,19 @@ export function HumanFirstReview({
   media,
   notify,
   onDecision,
-}: {
-  candidate: CandidateDetail;
-  analysis: Analysis;
-  media: CandidateMedia | null;
-  notify: (message: string) => void;
-  onDecision: (decision: Decision) => void;
-}) {
+  mode = 'hiring',
+  actions,
+}: HumanFirstReviewProps) {
+  const practice = mode === 'practice';
+  const decisionLabels = practice ? practiceStatusLabels : statusLabels;
+  const reviewActions = actions || {
+    rate: (questionId: string, rating: QuestionRating) =>
+      api.rateInterviewQuestion(candidate.id, questionId, rating),
+    reveal: (decision: InitialDecisionInput) =>
+      api.revealAiRecommendation(candidate.id, decision),
+    save: (decision: DecisionInput) =>
+      api.saveCandidateDecision(candidate.id, decision),
+  };
   const [review, setReview] = useState(analysis);
   const [activeIndex, setActiveIndex] = useState(
     Math.max(
@@ -183,13 +214,7 @@ export function HumanFirstReview({
     if (!question) return;
     setSaveNotice('');
     void run(async () => {
-      setReview(
-        await api.rateInterviewQuestion(
-          candidate.id,
-          question.questionId,
-          rating,
-        ),
-      );
+      setReview(await reviewActions.rate(question.questionId, rating));
       setSaveNotice('Оценка сохранена');
     });
   };
@@ -197,7 +222,7 @@ export function HumanFirstReview({
     event.preventDefault();
     if (!status || !feedback.trim() || !review.reviewComplete) return;
     void run(async () => {
-      const updated = await api.revealAiRecommendation(candidate.id, {
+      const updated = await reviewActions.reveal({
         status,
         candidateFeedback: feedback.trim(),
       });
@@ -216,7 +241,7 @@ export function HumanFirstReview({
     )
       return;
     void run(async () => {
-      const decision = await api.saveCandidateDecision(candidate.id, {
+      const decision = await reviewActions.save({
         status: finalStatus,
         candidateFeedback: finalFeedback.trim(),
         internalReason: initial?.internalReason || '',
@@ -228,7 +253,11 @@ export function HumanFirstReview({
         changeReason: adoptingOpposite ? changeReason.trim() : '',
       }));
       onDecision(decision);
-      notify('Решение и фидбэк доступны кандидату');
+      notify(
+        practice
+          ? 'Самооценка и план подготовки сохранены'
+          : 'Решение и фидбэк доступны кандидату',
+      );
       moveFocus();
     });
   };
@@ -239,26 +268,27 @@ export function HumanFirstReview({
         aria-label="Этапы оценки"
         className="grid grid-cols-3 gap-2 rounded-2xl border bg-card p-3 sm:gap-4 sm:p-4"
       >
-        {['Ответы кандидата', 'Ваше решение', 'Сверка с ИИ'].map(
-          (label, index) => (
-            <li
-              key={label}
-              aria-current={step === index + 1 ? 'step' : undefined}
-              className={`flex min-w-0 items-center gap-2 text-sm ${step === index + 1 ? 'font-semibold text-foreground' : 'text-muted-foreground'}`}
+        {(practice
+          ? ['Ваши ответы', 'Самооценка', 'Сверка с ИИ']
+          : ['Ответы кандидата', 'Ваше решение', 'Сверка с ИИ']
+        ).map((label, index) => (
+          <li
+            key={label}
+            aria-current={step === index + 1 ? 'step' : undefined}
+            className={`flex min-w-0 items-center gap-2 text-sm ${step === index + 1 ? 'font-semibold text-foreground' : 'text-muted-foreground'}`}
+          >
+            <span
+              className={`grid size-7 shrink-0 place-items-center rounded-full text-sm ${step > index + 1 || review.finalDecision ? 'bg-primary/10 text-primary' : step === index + 1 ? 'bg-primary text-primary-foreground' : 'bg-muted'}`}
             >
-              <span
-                className={`grid size-7 shrink-0 place-items-center rounded-full text-sm ${step > index + 1 || review.finalDecision ? 'bg-primary/10 text-primary' : step === index + 1 ? 'bg-primary text-primary-foreground' : 'bg-muted'}`}
-              >
-                {step > index + 1 || review.finalDecision ? (
-                  <Check className="size-4" aria-hidden="true" />
-                ) : (
-                  index + 1
-                )}
-              </span>
-              <span className="break-words">{label}</span>
-            </li>
-          ),
-        )}
+              {step > index + 1 || review.finalDecision ? (
+                <Check className="size-4" aria-hidden="true" />
+              ) : (
+                index + 1
+              )}
+            </span>
+            <span className="break-words">{label}</span>
+          </li>
+        ))}
       </ol>
 
       {error ? (
@@ -285,7 +315,9 @@ export function HumanFirstReview({
                 Оцените ответы
               </h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                По каждому вопросу — достаточно ли ответа для этой вакансии.
+                {practice
+                  ? 'Сначала самостоятельно оцените каждый свой ответ. Затем сравните выводы с анализом ИИ.'
+                  : 'По каждому вопросу — достаточно ли ответа для этой вакансии.'}
               </p>
             </div>
             <span className="rounded-full bg-muted px-3 py-1 text-sm tabular-nums">
@@ -469,7 +501,9 @@ export function HumanFirstReview({
                     {activeIndex < review.questions.length - 1
                       ? 'Следующий вопрос'
                       : review.reviewComplete
-                        ? 'К итоговому решению'
+                        ? practice
+                          ? 'К самооценке'
+                          : 'К итоговому решению'
                         : 'К вопросу без оценки'}
                     <ArrowRight aria-hidden="true" />
                   </Button>
@@ -487,11 +521,12 @@ export function HumanFirstReview({
             tabIndex={-1}
             className="text-xl font-semibold outline-none"
           >
-            Ваше решение по кандидату
+            {practice ? 'Ваша оценка готовности' : 'Ваше решение по кандидату'}
           </h2>
           <p className="mt-2 text-sm text-muted-foreground">
-            Все ответы оценены. Зафиксируйте своё решение и фидбэк перед
-            сравнением с ИИ.
+            {practice
+              ? 'Все ответы оценены. Запишите, что получилось и что стоит повторить, прежде чем открыть анализ ИИ.'
+              : 'Все ответы оценены. Зафиксируйте своё решение и фидбэк перед сравнением с ИИ.'}
           </p>
           <div className="my-6 divide-y rounded-xl border px-4">
             {review.questions.map((item, index) => (
@@ -520,13 +555,16 @@ export function HumanFirstReview({
               value={status}
               onChange={setStatus}
               disabled={busy}
+              practice={practice}
             />
             <div>
               <label
                 htmlFor="initial-feedback"
                 className="text-sm font-semibold"
               >
-                Фидбэк кандидату{' '}
+                {practice
+                  ? 'Ваши выводы и план подготовки'
+                  : 'Фидбэк кандидату'}{' '}
                 <span className="font-normal text-muted-foreground">
                   · обязательно
                 </span>
@@ -534,7 +572,11 @@ export function HumanFirstReview({
               <Textarea
                 id="initial-feedback"
                 className="mt-2 min-h-36 text-base"
-                placeholder="Что удалось подтвердить в ответах и почему вы приняли это решение"
+                placeholder={
+                  practice
+                    ? 'Что получилось, где не хватило знаний и что вы хотите повторить'
+                    : 'Что удалось подтвердить в ответах и почему вы приняли это решение'
+                }
                 value={feedback}
                 onChange={(event) => setFeedback(event.target.value)}
                 required
@@ -542,7 +584,9 @@ export function HumanFirstReview({
                 disabled={busy}
               />
               <p className="mt-2 text-sm text-muted-foreground">
-                Кандидат увидит фидбэк после окончательного подтверждения.
+                {practice
+                  ? 'Эта самооценка доступна только вам и не влияет на настоящее интервью.'
+                  : 'Кандидат увидит фидбэк после окончательного подтверждения.'}
               </p>
             </div>
             <div className="flex items-start gap-3 rounded-xl bg-muted/50 p-4 text-sm text-muted-foreground">
@@ -571,7 +615,9 @@ export function HumanFirstReview({
                 disabled={busy || !status || !feedback.trim()}
               >
                 {busy
-                  ? 'Сохраняем решение…'
+                  ? practice
+                    ? 'Сохраняем самооценку…'
+                    : 'Сохраняем решение…'
                   : 'Сохранить и посмотреть рекомендацию ИИ'}
                 <ArrowRight aria-hidden="true" />
               </Button>
@@ -589,13 +635,21 @@ export function HumanFirstReview({
               className="text-xl font-semibold outline-none"
             >
               {review.finalDecision
-                ? 'Решение подтверждено'
-                : 'Сравните решения'}
+                ? practice
+                  ? 'Разбор тренировки завершён'
+                  : 'Решение подтверждено'
+                : practice
+                  ? 'Сравните свою оценку с ИИ'
+                  : 'Сравните решения'}
             </h2>
             <p className="mt-2 text-sm text-muted-foreground">
               {review.finalDecision
-                ? 'Кандидату доступны окончательное решение и фидбэк.'
-                : 'Первоначальное решение сохранено. Последнее слово за вами.'}
+                ? practice
+                  ? 'Ваши выводы сохранены. К ним можно вернуться из подготовки к интервью.'
+                  : 'Кандидату доступны окончательное решение и фидбэк.'
+                : practice
+                  ? 'Самооценка сохранена. Решите, какие выводы ИИ помогут вашей подготовке.'
+                  : 'Первоначальное решение сохранено. Последнее слово за вами.'}
             </p>
           </div>
           <div className="grid gap-4 md:grid-cols-2">
@@ -605,10 +659,14 @@ export function HumanFirstReview({
                   className="size-4 text-primary"
                   aria-hidden="true"
                 />
-                Ваше решение до рекомендации ИИ
+                {practice
+                  ? 'Самооценка до анализа ИИ'
+                  : 'Ваше решение до рекомендации ИИ'}
               </div>
               <p className="mt-4 text-2xl font-semibold">
-                {initial ? statusLabels[initial.status] : 'Ранее подтверждено'}
+                {initial
+                  ? decisionLabels[initial.status]
+                  : 'Ранее подтверждено'}
               </p>
               <p className="mt-3 whitespace-pre-wrap break-words text-base leading-7">
                 {initial?.candidateFeedback ||
@@ -622,7 +680,7 @@ export function HumanFirstReview({
               </div>
               <p className="mt-4 text-2xl font-semibold">
                 {aiStatus
-                  ? statusLabels[aiStatus]
+                  ? decisionLabels[aiStatus]
                   : 'Нужна дополнительная проверка'}
               </p>
               <p className="mt-3 whitespace-pre-wrap break-words text-base leading-7">
@@ -642,7 +700,9 @@ export function HumanFirstReview({
             >
               <fieldset disabled={busy}>
                 <legend className="mb-3 font-semibold">
-                  Какое решение подтвердить?
+                  {practice
+                    ? 'Как вы оцениваете готовность после разбора?'
+                    : 'Какое решение подтвердить?'}
                 </legend>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <label
@@ -663,7 +723,7 @@ export function HumanFirstReview({
                         Оставить своё решение
                       </span>
                       <span className="mt-1 block text-muted-foreground">
-                        {statusLabels[initial.status]}
+                        {decisionLabels[initial.status]}
                       </span>
                     </span>
                   </label>
@@ -684,7 +744,7 @@ export function HumanFirstReview({
                           Принять рекомендацию ИИ
                         </span>
                         <span className="mt-1 block text-muted-foreground">
-                          {statusLabels[aiStatus]}
+                          {decisionLabels[aiStatus]}
                         </span>
                       </span>
                     </label>
@@ -703,14 +763,17 @@ export function HumanFirstReview({
                     htmlFor="change-reason"
                     className="text-sm font-semibold"
                   >
-                    Почему вы изменили решение?
+                    {practice
+                      ? 'Почему изменилась ваша самооценка?'
+                      : 'Почему вы изменили решение?'}
                   </label>
                   <p
                     id="change-reason-help"
                     className="mt-1 text-sm text-muted-foreground"
                   >
-                    Какой аргумент ИИ повлиял на вашу оценку? Это внутренний
-                    комментарий, кандидат его не увидит.
+                    {practice
+                      ? 'Какой аргумент ИИ повлиял на вашу самооценку? Запишите причину, чтобы вернуться к ней при подготовке.'
+                      : 'Какой аргумент ИИ повлиял на вашу оценку? Это внутренний комментарий, кандидат его не увидит.'}
                   </p>
                   <Textarea
                     id="change-reason"
@@ -730,7 +793,9 @@ export function HumanFirstReview({
                   htmlFor="final-feedback"
                   className="text-sm font-semibold"
                 >
-                  Фидбэк, который увидит кандидат
+                  {practice
+                    ? 'Итоговые выводы и план подготовки'
+                    : 'Фидбэк, который увидит кандидат'}
                 </label>
                 <Textarea
                   id="final-feedback"
@@ -743,13 +808,17 @@ export function HumanFirstReview({
                 />
                 {adoptingOpposite ? (
                   <p className="mt-2 text-sm text-muted-foreground">
-                    Проверьте, что фидбэк соответствует новому решению.
+                    {practice
+                      ? 'Уточните план подготовки с учётом нового вывода.'
+                      : 'Проверьте, что фидбэк соответствует новому решению.'}
                   </p>
                 ) : null}
               </div>
               <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-5">
                 <p className="text-sm text-muted-foreground">
-                  После подтверждения результат появится у кандидата.
+                  {practice
+                    ? 'Результат сохранится в вашей тренировке. Рекрутер его не увидит.'
+                    : 'После подтверждения результат появится у кандидата.'}
                 </p>
                 <Button
                   type="submit"
@@ -762,7 +831,9 @@ export function HumanFirstReview({
                 >
                   {busy
                     ? 'Подтверждаем…'
-                    : `Подтвердить: ${finalStatus ? statusLabels[finalStatus].toLowerCase() : 'решение'}`}
+                    : practice
+                      ? 'Сохранить выводы'
+                      : `Подтвердить: ${finalStatus ? decisionLabels[finalStatus].toLowerCase() : 'решение'}`}
                   <Check aria-hidden="true" />
                 </Button>
               </div>
@@ -776,7 +847,7 @@ export function HumanFirstReview({
                   aria-hidden="true"
                 />
                 <h3 className="font-semibold">
-                  {statusLabels[review.finalDecision.status]}
+                  {decisionLabels[review.finalDecision.status]}
                 </h3>
               </div>
               <p className="mt-3 whitespace-pre-wrap break-words text-base leading-7">
@@ -785,7 +856,9 @@ export function HumanFirstReview({
               {review.changeReason ? (
                 <div className="mt-4 border-t pt-4">
                   <p className="text-sm font-medium">
-                    Причина изменения · только для команды
+                    {practice
+                      ? 'Почему изменилась самооценка · только для вас'
+                      : 'Причина изменения · только для команды'}
                   </p>
                   <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6">
                     {review.changeReason}
@@ -830,13 +903,17 @@ export function HumanFirstReview({
       {step < 3 ? (
         <p className="flex items-center gap-2 px-1 text-sm text-muted-foreground">
           <LockKeyhole className="size-4 shrink-0" aria-hidden="true" />
-          Рекомендация ИИ откроется после вашего решения и фидбэка.
+          {practice
+            ? 'Анализ ИИ откроется после оценки ответов и вашей самостоятельной рефлексии.'
+            : 'Рекомендация ИИ откроется после вашего решения и фидбэка.'}
         </p>
       ) : null}
       {media?.assets.length ? (
         <details className="rounded-xl border bg-card p-4">
           <summary className="cursor-pointer text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">
-            Скачать материалы интервью
+            {practice
+              ? 'Скачать материалы тренировки'
+              : 'Скачать материалы интервью'}
           </summary>
           <div className="mt-3 grid gap-2 sm:grid-cols-2">
             {media.assets.map((asset) => (

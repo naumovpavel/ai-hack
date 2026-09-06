@@ -279,6 +279,10 @@ class HiringAI:
     async def parse_vacancy(
         self, text: str, context: str, *, pdf: bytes | None, filename: str
     ) -> VacancyFields:
+        # The service has already extracted and bounded the document text.
+        # Do not base64-upload a large image-heavy PDF to the model a second time.
+        if pdf is not None and len(pdf) > 4 * 1024 * 1024:
+            pdf = None
         if self.testing:
             return VacancyFields(
                 title=text.splitlines()[0][:240] or "Backend-разработчик",

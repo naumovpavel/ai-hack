@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from interview_api.api.exception_handlers import register_exception_handlers
 from interview_api.api.routes.health import router as health_router
 from interview_api.api.routes.interviews import router as interviews_router
+from interview_api.api.routes.practice import router as practice_router
 from interview_api.api.routes.questions import router as questions_router
 from interview_api.api.routes.transcriptions import router as transcriptions_router
 from interview_api.api.routes.workflow import router as workflow_router
@@ -30,6 +31,7 @@ from interview_api.services.answer_evaluation import AnswerEvaluationService
 from interview_api.services.document_extraction import DocumentExtractionService
 from interview_api.services.question_generation import QuestionGenerationService
 from interview_api.services.transcription import TranscriptionService
+from interview_api.workflow.deletion_routes import router as deletion_router
 from interview_api.workflow.openrouter import OpenRouterWorkflowAI
 from interview_api.workflow.repository import SqlAlchemyWorkflowRepository
 from interview_api.workflow.service import WorkflowService
@@ -290,6 +292,8 @@ def create_app(
     app.include_router(questions_router)
     app.include_router(transcriptions_router)
     app.include_router(workflow_router)
+    app.include_router(practice_router)
+    app.include_router(deletion_router)
     app.include_router(telegram_router)
     return app
 

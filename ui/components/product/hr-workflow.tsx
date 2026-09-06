@@ -30,6 +30,7 @@ import {
   Users,
 } from 'lucide-react';
 import { CandidateWorkspace } from './candidate-workspace';
+import { DeleteResourceButton } from './delete-resource-button';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -43,6 +44,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { api } from '@/lib/api';
+import { copyText } from '@/lib/clipboard';
 import type {
   Approval,
   CandidateDraft,
@@ -303,7 +305,7 @@ function FilePicker({
         {label}
       </Button>
       <p className="mt-3 text-xs text-muted-foreground">
-        PDF, DOCX или TXT · до 10 МБ
+        PDF, DOCX или TXT · до 50 МБ
       </p>
       <input
         ref={input}
@@ -318,12 +320,12 @@ function FilePicker({
           event.target.value = '';
           const invalid = files.find(
             (file) =>
-              file.size > 10 * 1024 * 1024 ||
+              file.size > 50 * 1024 * 1024 ||
               !/\.(pdf|docx|txt)$/i.test(file.name),
           );
           if (invalid) {
             setError(
-              `Файл «${invalid.name}» должен быть PDF, DOCX или TXT размером до 10 МБ.`,
+              `Файл «${invalid.name}» должен быть PDF, DOCX или TXT размером до 50 МБ.`,
             );
             return;
           }
@@ -641,10 +643,12 @@ function candidateStatus(candidate: CandidateSummary) {
 function CandidateRows({
   candidates,
   onOpen,
+  onDeleted,
   global = false,
 }: {
   candidates: CandidateSummary[];
   onOpen: (candidate: CandidateSummary) => void;
+  onDeleted: (candidate: CandidateSummary) => void;
   global?: boolean;
 }) {
   return (
@@ -652,42 +656,50 @@ function CandidateRows({
       {candidates.map((candidate) => {
         const [label, color] = candidateStatus(candidate);
         return (
-          <button
-            key={candidate.id}
-            className="candidate-row w-full flex-wrap text-left"
-            onClick={() => onOpen(candidate)}
-          >
-            <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-accent text-xs font-semibold text-accent-foreground">
-              {candidate.name
-                .split(/\s+/)
-                .slice(0, 2)
-                .map((name) => name[0])
-                .join('')}
-            </span>
-            <span className="min-w-[140px] flex-1">
-              <span className="block text-sm font-semibold">
-                {candidate.name}
+          <div key={candidate.id} className="flex items-center gap-2">
+            <button
+              className="candidate-row min-w-0 flex-1 flex-wrap text-left"
+              onClick={() => onOpen(candidate)}
+            >
+              <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-accent text-xs font-semibold text-accent-foreground">
+                {candidate.name
+                  .split(/\s+/)
+                  .slice(0, 2)
+                  .map((name) => name[0])
+                  .join('')}
               </span>
-              <span className="mt-1 block text-xs text-muted-foreground">
-                {candidate.role}
-              </span>
-            </span>
-            {global ? (
-              <span className="min-w-[180px] flex-1">
-                <span className="block text-sm">
-                  {candidate.vacancyTitle || 'Вакансия'}
+              <span className="min-w-[140px] flex-1">
+                <span className="block text-sm font-semibold">
+                  {candidate.name}
                 </span>
                 <span className="mt-1 block text-xs text-muted-foreground">
-                  {candidate.interviewName || 'Интервью'}
+                  {candidate.role}
                 </span>
               </span>
-            ) : null}
-            <Badge className={color}>{label}</Badge>
-            <ChevronRight
-              className="size-4 text-muted-foreground"
-              aria-hidden="true"
+              {global ? (
+                <span className="min-w-[180px] flex-1">
+                  <span className="block text-sm">
+                    {candidate.vacancyTitle || 'Вакансия'}
+                  </span>
+                  <span className="mt-1 block text-xs text-muted-foreground">
+                    {candidate.interviewName || 'Интервью'}
+                  </span>
+                </span>
+              ) : null}
+              <Badge className={color}>{label}</Badge>
+              <ChevronRight
+                className="size-4 text-muted-foreground"
+                aria-hidden="true"
+              />
+            </button>
+            <DeleteResourceButton
+              compact
+              kind="candidate"
+              id={candidate.id}
+              name={candidate.name}
+              onDeleted={() => onDeleted(candidate)}
             />
-          </button>
+          </div>
         );
       })}
     </div>
@@ -1565,16 +1577,29 @@ function VacancyOverview({
         title={vacancy.title}
         description={`${vacancy.role} · ${vacancy.level}`}
         action={
-          <Button
-            variant="outline"
-            onClick={() => {
-              setEditing(vacancy);
-              setError('');
-            }}
-          >
-            <Pencil data-icon="inline-start" />
-            Редактировать
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setEditing(vacancy);
+                setError('');
+              }}
+            >
+              <Pencil data-icon="inline-start" />
+              Редактировать
+            </Button>
+            <DeleteResourceButton
+              kind="vacancy"
+              id={vacancy.id}
+              name={vacancy.title}
+              interviewCount={vacancy.interviewCount}
+              candidateCount={vacancy.candidateCount}
+              onDeleted={() => {
+                notify('Вакансия удалена');
+                navigate({ type: 'vacancies' });
+              }}
+            />
+          </div>
         }
       />
       <section className="surface-card p-6 sm:p-7">
@@ -2025,12 +2050,12 @@ function AddCandidateDialog({
           .map((question) => ({ ...question, text: question.text.trim() }))
           .filter((question) => question.text),
       });
-      try {
-        await navigator.clipboard.writeText(result.inviteUrl);
-        notify('Кандидат добавлен. Ссылка на интервью скопирована');
-      } catch {
-        notify('Кандидат добавлен. Ссылка доступна над списком кандидатов');
-      }
+      const copied = await copyText(result.inviteUrl);
+      notify(
+        copied
+          ? 'Кандидат добавлен. Ссылка на интервью скопирована'
+          : 'Кандидат добавлен. Выделите и скопируйте ссылку над списком кандидатов',
+      );
       onSaved(result);
       onClose();
     } catch (caught) {
@@ -2225,6 +2250,18 @@ function InterviewOverview({
         eyebrow={interview.vacancy.title}
         title={interview.name}
         description={`${interview.questions.length} общих вопросов · до ${interview.maxPersonalizedQuestions} персонализированных · до ${interview.maxFollowUpQuestions} уточняющих · ${interview.durationMinutes} минут`}
+        action={
+          <DeleteResourceButton
+            kind="interview"
+            id={interview.id}
+            name={interview.name}
+            candidateCount={interview.candidateCount}
+            onDeleted={() => {
+              notify('Интервью удалено');
+              navigate({ type: 'vacancy', vacancyId });
+            }}
+          />
+        }
       />
       <section className="surface-card p-6">
         <TemplateSummary template={interview} />
@@ -2258,12 +2295,12 @@ function InterviewOverview({
                 variant="outline"
                 size="sm"
                 onClick={async () => {
-                  try {
-                    await navigator.clipboard.writeText(approval.inviteUrl);
-                    notify('Ссылка скопирована');
-                  } catch {
-                    notify('Выделите и скопируйте ссылку из поля');
-                  }
+                  const copied = await copyText(approval.inviteUrl);
+                  notify(
+                    copied
+                      ? 'Ссылка скопирована'
+                      : 'Выделите и скопируйте ссылку из поля',
+                  );
                 }}
               >
                 <Clipboard data-icon="inline-start" />
@@ -2275,6 +2312,11 @@ function InterviewOverview({
         {interview.candidates.length ? (
           <CandidateRows
             candidates={interview.candidates}
+            onDeleted={(candidate) => {
+              if (approval?.candidateId === candidate.id) setApproval(null);
+              notify('Кандидат удалён');
+              resource.reload();
+            }}
             onOpen={(candidate) =>
               navigate({
                 type: 'candidate',
@@ -2332,7 +2374,13 @@ function InterviewOverview({
   );
 }
 
-function CandidatesPage({ navigate }: { navigate: (view: View) => void }) {
+function CandidatesPage({
+  navigate,
+  notify,
+}: {
+  navigate: (view: View) => void;
+  notify: Notify;
+}) {
   const [search, setSearch] = useState('');
   const resource = useResource(
     useCallback((signal: AbortSignal) => api.listCandidates('', signal), []),
@@ -2369,6 +2417,10 @@ function CandidatesPage({ navigate }: { navigate: (view: View) => void }) {
             <CandidateRows
               global
               candidates={candidates}
+              onDeleted={() => {
+                notify('Кандидат удалён');
+                resource.reload();
+              }}
               onOpen={(candidate) =>
                 navigate({ type: 'candidate', candidateId: candidate.id })
               }
@@ -2466,7 +2518,7 @@ export function HrApp({ notify }: { notify: Notify }) {
       />
     );
   else if (view.type === 'candidates')
-    content = <CandidatesPage navigate={navigate} />;
+    content = <CandidatesPage navigate={navigate} notify={notify} />;
   else if (view.type === 'candidate')
     content = (
       <CandidateWorkspace

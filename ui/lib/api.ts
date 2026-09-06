@@ -151,7 +151,36 @@ async function readPayload(response: Response): Promise<unknown> {
   return text || undefined;
 }
 
-async function request<T>(
+function responseError(status: number, payload: unknown): ApiError {
+  const errorPayload =
+    payload && typeof payload === 'object'
+      ? (payload as ErrorPayload)
+      : undefined;
+  const fallback =
+    status === 413
+      ? 'Файл слишком большой. Максимальный размер документа — 50 МБ.'
+      : [502, 503, 504].includes(status)
+        ? 'Сервер временно недоступен или обработка заняла слишком много времени. Повторите загрузку по HTTPS-ссылке; если ошибка возникает только с VPN, проверьте его соединение.'
+        : `Не удалось выполнить запрос (код ${status}).`;
+  const plainText =
+    typeof payload === 'string' &&
+    !/^\s*</.test(payload) &&
+    payload.length < 500
+      ? payload
+      : '';
+  return new ApiError(
+    validationMessage(errorPayload?.error) ||
+      errorPayload?.error?.message ||
+      detailMessage(errorPayload?.detail) ||
+      plainText ||
+      fallback,
+    status,
+    errorPayload?.error?.code,
+    errorPayload?.error?.details,
+  );
+}
+
+export async function request<T>(
   path: string,
   options: RequestOptions = {},
 ): Promise<T | null> {
@@ -169,25 +198,103 @@ async function request<T>(
 
   const payload = await readPayload(response);
   if (!response.ok) {
-    const errorPayload =
-      payload && typeof payload === 'object'
-        ? (payload as ErrorPayload)
-        : undefined;
-    throw new ApiError(
-      validationMessage(errorPayload?.error) ||
-        errorPayload?.error?.message ||
-        detailMessage(errorPayload?.detail) ||
-        (typeof payload === 'string' ? payload : '') ||
-        `API request failed with status ${response.status}`,
-      response.status,
-      errorPayload?.error?.code,
-      errorPayload?.error?.details,
-    );
+    throw responseError(response.status, payload);
   }
   return payload as T;
 }
 
-async function required<T>(path: string, options?: RequestOptions): Promise<T> {
+export type UploadOptions = {
+  signal?: AbortSignal;
+  onProgress?: (percent: number) => void;
+};
+
+/** One upload per call: retries stay explicit, since a POST may already have completed. */
+export function uploadForm<T>(
+  path: string,
+  form: FormData,
+  options: UploadOptions = {},
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    if (options.signal?.aborted) {
+      reject(new DOMException('Запрос отменён', 'AbortError'));
+      return;
+    }
+    const xhr = new XMLHttpRequest();
+    const abort = () => xhr.abort();
+    const cleanup = () => options.signal?.removeEventListener('abort', abort);
+    xhr.open('POST', endpoint(path));
+    xhr.withCredentials = true;
+    xhr.timeout = 15 * 60 * 1000;
+    xhr.setRequestHeader('Accept', 'application/json');
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0)
+        options.onProgress?.(Math.round((event.loaded / event.total) * 100));
+    };
+    xhr.onload = () => {
+      cleanup();
+      let payload: unknown = xhr.responseText || undefined;
+      if (xhr.getResponseHeader('Content-Type')?.includes('application/json')) {
+        try {
+          payload = JSON.parse(xhr.responseText);
+        } catch {
+          reject(
+            new ApiError(
+              'Сервер вернул неполный ответ. Повторите запрос.',
+              502,
+              'invalid_response',
+            ),
+          );
+          return;
+        }
+      }
+      if (xhr.status < 200 || xhr.status >= 300) {
+        reject(responseError(xhr.status, payload));
+      } else if (payload === undefined || payload === null) {
+        reject(
+          new ApiError(
+            'Сервер вернул пустой ответ. Повторите запрос.',
+            502,
+            'empty_response',
+          ),
+        );
+      } else {
+        options.onProgress?.(100);
+        resolve(payload as T);
+      }
+    };
+    xhr.onerror = () => {
+      cleanup();
+      reject(
+        new ApiError(
+          'Соединение прервалось при загрузке. Проверьте интернет или VPN и повторите отправку.',
+          0,
+          'network_error',
+        ),
+      );
+    };
+    xhr.ontimeout = () => {
+      cleanup();
+      reject(
+        new ApiError(
+          'Время ожидания загрузки истекло. Проверьте соединение и повторите отправку.',
+          408,
+          'upload_timeout',
+        ),
+      );
+    };
+    xhr.onabort = () => {
+      cleanup();
+      reject(new DOMException('Запрос отменён', 'AbortError'));
+    };
+    options.signal?.addEventListener('abort', abort, { once: true });
+    xhr.send(form);
+  });
+}
+
+export async function required<T>(
+  path: string,
+  options?: RequestOptions,
+): Promise<T> {
   const payload = await request<T>(path, options);
   if (payload === null || payload === undefined) {
     throw new ApiError('API returned an empty response', 502, 'empty_response');
@@ -199,7 +306,10 @@ function unwrapItems<T>(payload: T[] | { items: T[] }): T[] {
   return Array.isArray(payload) ? payload : payload.items;
 }
 
-function jsonRequest(body: unknown, init: RequestInit = {}): RequestInit {
+export function jsonRequest(
+  body: unknown,
+  init: RequestInit = {},
+): RequestInit {
   const headers = new Headers(init.headers);
   headers.set('Content-Type', 'application/json');
   return {
@@ -296,11 +406,7 @@ export const api = {
   ): Promise<ContextDocument> {
     const form = new FormData();
     form.set('document', document, document.name);
-    return required<ContextDocument>('/company-context', {
-      method: 'POST',
-      body: form,
-      signal,
-    });
+    return uploadForm<ContextDocument>('/company-context', form, { signal });
   },
 
   async listVacancyTemplates(signal?: AbortSignal): Promise<VacancyTemplate[]> {
@@ -367,11 +473,7 @@ export const api = {
   parseVacancy(file: File, signal?: AbortSignal): Promise<VacancyDraft> {
     const form = new FormData();
     form.set('vacancy', file, file.name);
-    return required<VacancyDraft>('/vacancies/parse', {
-      method: 'POST',
-      body: form,
-      signal,
-    });
+    return uploadForm<VacancyDraft>('/vacancies/parse', form, { signal });
   },
 
   createVacancy(draft: VacancyDraft): Promise<VacancyDetail> {
@@ -449,9 +551,10 @@ export const api = {
   ): Promise<CandidateDraft> {
     const form = new FormData();
     form.set('resume', resume, resume.name);
-    return required<CandidateDraft>(
+    return uploadForm<CandidateDraft>(
       `/interview-plans/${encodeURIComponent(interviewPlanId)}/candidates/prepare`,
-      { method: 'POST', body: form, signal },
+      form,
+      { signal },
     );
   },
 
@@ -700,13 +803,10 @@ export const api = {
     if (durationSeconds !== undefined)
       form.set('durationSeconds', String(durationSeconds));
     form.set('language', 'ru');
-    return required<AnswerResult>(
+    return uploadForm<AnswerResult>(
       `/interviews/${encodeURIComponent(interviewId)}/answers`,
-      {
-        method: 'POST',
-        body: form,
-        signal,
-      },
+      form,
+      { signal },
     );
   },
 

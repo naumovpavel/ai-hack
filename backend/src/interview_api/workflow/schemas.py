@@ -174,11 +174,27 @@ class PracticeQuestionResponse(ApiModel):
 class PracticeSetResponse(ApiModel):
     mode: Literal["practice"] = "practice"
     questions: list[PracticeQuestionResponse]
-    local_only: bool = True
+    practice_id: str
+    interview_id: str
+    status: str
+    current_question: PracticeQuestionResponse | None = None
+    answered_question_ids: list[str] = Field(default_factory=list)
+    remaining_seconds: int = 0
+    started_at: datetime | None = None
+    deadline_at: datetime | None = None
+    local_only: bool = False
     notice: str = (
         "Это тренировочные примеры. Настоящие вопросы будут другими, а ответы "
-        "не передаются рекрутеру и не используются при оценке."
+        "сохраняются для личного разбора, не передаются рекрутеру и не влияют на отбор."
     )
+
+
+class PracticeAnswerResponse(ApiModel):
+    answer_id: str
+    transcript: str
+    next_question: PracticeQuestionResponse | None
+    follow_up_added: bool = False
+    remaining_seconds: int
 
 
 class StartInterviewRequest(ApiModel):

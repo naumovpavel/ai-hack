@@ -195,11 +195,13 @@ def test_plan_candidate_can_practice_then_complete_real_interview(hiring_client,
     path = f"/api/v1/interviews/{approval['interviewId']}"
     before = assert_ok(client.get(f"{path}/state"))
     examples = assert_ok(client.post(f"{path}/practice"))
-    assert len(examples["questions"]) == 3
+    topics = assert_ok(client.get(path))["topics"]
+    assert {q["topic"] for q in examples["questions"]} == set(topics)
     assert calls == [{
+        "broad_topics": topics,
         "role_family": service._practice_role_family(vacancy["role"]),
         "level_band": service._practice_level_band(vacancy["level"], vacancy["title"]),
-        "question_count": 3,
+        "question_count": max(3, len(topics)),
         "language": "ru",
     }]
     assert all(

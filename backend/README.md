@@ -35,14 +35,19 @@ The `/api/v1` workflow covers:
 - positions with vacancy uploads and interview constraints (`/positions`);
 - resume upload and generated question drafts (`/positions/{id}/candidates`);
 - question editing, approval and candidate invite URLs;
-- isolated practice-question sets that use only a broad role family and never
+- isolated practice-question sets that use a broad role family, grade, and
+  generalized topic categories, and never
   receive the vacancy text, resume, requirements, seed questions or real
   interview questions;
+- candidate-private persisted practice recordings, analysis and self-review;
+- owner-only deletion of candidates, interview plans and vacancies with dependent
+  records and invitation revocation;
 - candidate briefing, consent, TTS, answer media upload, STT and adaptive
   follow-up questions;
 - interview completion and structured analysis;
 - private media/transcript download links;
-- per-item review heartbeats and the server-enforced decision gate;
+- per-question assessment and an initial human judgment before the overall AI
+  recommendation is revealed, with a server-enforced decision gate;
 - the candidate-facing recruiter outcome, without the internal reason.
 
 Question generation, follow-up selection and analysis use structured OpenRouter

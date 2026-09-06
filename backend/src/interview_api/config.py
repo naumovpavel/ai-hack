@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     interview_judge_workers: int = Field(default=6, ge=1, le=20)
 
     question_prompt_path: Path = Path("app/prompts/initial_questions_v1.txt")
-    max_document_bytes: int = Field(default=10 * 1024 * 1024, gt=0)
+    max_document_bytes: int = Field(default=50 * 1024 * 1024, gt=0)
     max_document_characters: int = Field(default=100_000, gt=0)
     max_audio_bytes: int = Field(default=20 * 1024 * 1024, gt=0)
     whisper_model_size: str = "small"

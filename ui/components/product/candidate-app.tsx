@@ -32,11 +32,18 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { api, ApiError } from '@/lib/api';
+import {
+  mediaAccessError,
+  mediaAccessSupportError,
+  requestInterviewMedia,
+} from '@/lib/media-access';
+import { practiceApi, type PracticeSession } from '@/lib/practice-api';
+import { PracticeReview } from './practice-review';
 import type {
   CandidateOutcome,
   InterviewBriefing,
   InterviewState,
-  PracticeSet,
+  PracticeQuestion,
   PublicQuestion,
 } from '@/lib/types';
 
@@ -70,6 +77,10 @@ type PendingAnswer = {
   durationSeconds: number;
 };
 
+type PendingPracticeAnswer = Omit<PendingAnswer, 'question'> & {
+  question: PracticeQuestion;
+};
+
 const MAX_ANSWER_SECONDS = 180;
 
 function errorText(error: unknown) {
@@ -82,12 +93,19 @@ function errorText(error: unknown) {
 function BackButton({
   onClick,
   label,
+  disabled = false,
 }: {
   onClick: () => void;
   label: string;
+  disabled?: boolean;
 }) {
   return (
-    <Button variant="ghost" onClick={onClick} className="-ml-2 mb-6">
+    <Button
+      variant="ghost"
+      onClick={onClick}
+      disabled={disabled}
+      className="-ml-2 mb-6"
+    >
       <ArrowLeft data-icon="inline-start" /> {label}
     </Button>
   );
@@ -304,7 +322,7 @@ function Preparation({
   onPractice,
 }: {
   briefing: InterviewBriefing;
-  practiceSet: PracticeSet | null;
+  practiceSet: PracticeSession | null;
   practiceLoading: boolean;
   practiceError: string;
   onBack: () => void;
@@ -378,9 +396,9 @@ function Preparation({
                 <div className="max-w-xl">
                   <h2 className="font-semibold">Попробуйте до начала</h2>
                   <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                    Примеры показывают только формат общения. Они созданы для
-                    похожей вымышленной ситуации и не повторяют вопросы этого
-                    интервью.
+                    Пройдите мок-интервью по тем же общим темам с другими
+                    вопросами. После записи оцените свои ответы и сравните
+                    выводы с анализом ИИ. Настоящее интервью начнётся отдельно.
                   </p>
                 </div>
                 <Badge className="bg-emerald-50 text-emerald-700">
@@ -431,7 +449,14 @@ function Preparation({
                 </Button>
                 <Button onClick={onPractice} disabled={practiceLoading}>
                   <Mic2 data-icon="inline-start" />
-                  Пройти тренировку
+                  {practiceSet &&
+                  ['analyzing', 'completed', 'error'].includes(
+                    practiceSet.status,
+                  )
+                    ? 'Открыть разбор тренировки'
+                    : practiceSet?.status === 'in_progress'
+                      ? 'Продолжить тренировку'
+                      : 'Пройти тренировку'}
                 </Button>
               </div>
             </section>
@@ -529,7 +554,7 @@ function Preflight({
   practice = false,
 }: {
   onBack: () => void;
-  onReady: (stream: MediaStream) => void;
+  onReady: (stream: MediaStream) => void | Promise<void>;
   practice?: boolean;
 }) {
   const [stream, setStream] = useState<MediaStream | null>(null);
@@ -537,8 +562,27 @@ function Preflight({
     'idle' | 'requesting' | 'granted' | 'denied'
   >('idle');
   const [error, setError] = useState('');
+  const [consent, setConsent] = useState(false);
+  const [starting, setStarting] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const handedOffRef = useRef(false);
+  const requestRef = useRef(0);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    const frame = window.requestAnimationFrame(() => {
+      const supportError = mediaAccessSupportError();
+      if (supportError) {
+        setError(supportError);
+        setStatus('denied');
+      }
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      mountedRef.current = false;
+      requestRef.current += 1;
+    };
+  }, []);
   useEffect(() => {
     if (videoRef.current && stream) videoRef.current.srcObject = stream;
   }, [stream]);
@@ -552,39 +596,45 @@ function Preflight({
   );
 
   const requestAccess = async () => {
+    const requestId = ++requestRef.current;
     setStatus('requesting');
     setError('');
+    const timeout = window.setTimeout(() => {
+      if (!mountedRef.current || requestRef.current !== requestId) return;
+      requestRef.current += 1;
+      setStatus('denied');
+      setError(
+        'Браузер пока не ответил на запрос. Проверьте окно разрешений камеры и микрофона, затем нажмите «Попробовать снова».',
+      );
+    }, 30_000);
     try {
-      if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
-        throw new Error('Браузер не поддерживает запись с микрофона.');
-      }
       stream?.getTracks().forEach((track) => track.stop());
-      const media = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: {
-          facingMode: 'user',
-          width: { ideal: 640, max: 640 },
-          height: { ideal: 360, max: 480 },
-          frameRate: { ideal: 15, max: 15 },
-        },
-      });
+      setStream(null);
+      const media = await requestInterviewMedia();
+      if (!mountedRef.current || requestRef.current !== requestId) {
+        media.getTracks().forEach((track) => track.stop());
+        return;
+      }
       setStream(media);
       setStatus('granted');
     } catch (caught) {
+      if (!mountedRef.current || requestRef.current !== requestId) return;
       setStatus('denied');
-      setError(errorText(caught));
+      setError(mediaAccessError(caught));
+    } finally {
+      window.clearTimeout(timeout);
     }
   };
 
   return (
     <main className="candidate-shell max-w-5xl">
-      <BackButton onClick={onBack} label="К подготовке" />
+      <BackButton onClick={onBack} label="К подготовке" disabled={starting} />
       <div className="text-center">
         <p className="eyebrow">Проверка устройств</p>
         <h1 className="page-title">Камера и микрофон</h1>
         <p className="mx-auto mt-3 max-w-xl text-sm text-muted-foreground">
           {practice
-            ? 'Разрешите доступ в системном окне. Тренировочная запись останется в браузере и будет удалена после ответа.'
+            ? 'Записи тренировки сохранятся на сервере для транскрипта и личного разбора. Аудио и текст обрабатываются моделями через OpenRouter; видео хранится у сервиса. Рекрутер не увидит тренировочные ответы и анализ.'
             : 'Разрешите доступ в системном окне браузера. Запись начнётся только после кнопки «Начать интервью».'}
         </p>
       </div>
@@ -632,23 +682,49 @@ function Preflight({
               {error}
             </p>
           ) : null}
+          {practice ? (
+            <label className="consent-row" htmlFor="practice-recording-consent">
+              <Checkbox
+                id="practice-recording-consent"
+                checked={consent}
+                onCheckedChange={(value) => setConsent(value === true)}
+              />
+              <span>
+                Я согласен на запись и обработку мок-интервью для личного
+                разбора.
+              </span>
+            </label>
+          ) : null}
           {status === 'granted' ? (
             <Button
               className="mt-5 h-12 w-full"
-              onClick={() => {
+              disabled={starting || (practice && !consent)}
+              onClick={async () => {
                 if (!stream) return;
-                handedOffRef.current = true;
-                onReady(stream);
+                setStarting(true);
+                try {
+                  handedOffRef.current = true;
+                  await onReady(stream);
+                } catch (caught) {
+                  handedOffRef.current = false;
+                  setError(errorText(caught));
+                } finally {
+                  if (mountedRef.current) setStarting(false);
+                }
               }}
             >
-              {practice ? 'Начать тренировку' : 'Начать интервью'}
+              {starting
+                ? 'Начинаем…'
+                : practice
+                  ? 'Начать тренировку'
+                  : 'Начать интервью'}
               <ArrowRight data-icon="inline-end" />
             </Button>
           ) : (
             <Button
               className="mt-5 h-12 w-full"
               onClick={() => void requestAccess()}
-              disabled={status === 'requesting'}
+              disabled={status === 'requesting' || (practice && !consent)}
             >
               {status === 'requesting'
                 ? 'Запрашиваем доступ…'
@@ -659,6 +735,7 @@ function Preflight({
             <Button
               variant="outline"
               className="mt-2 w-full"
+              disabled={practice && !consent}
               onClick={() => void requestAccess()}
             >
               <RotateCcw data-icon="inline-start" />
@@ -677,21 +754,31 @@ function PracticeRoom({
   onComplete,
   onBack,
 }: {
-  practiceSet: PracticeSet;
+  practiceSet: PracticeSession;
   stream: MediaStream;
   onComplete: () => void;
   onBack: () => void;
 }) {
-  const [questionIndex, setQuestionIndex] = useState(0);
+  const [questionIndex, setQuestionIndex] = useState(() =>
+    practiceSet.currentQuestion
+      ? practiceSet.questions.findIndex(
+          (item) => item.id === practiceSet.currentQuestion?.id,
+        )
+      : practiceSet.answeredQuestionIds.length,
+  );
   const [recording, setRecording] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [error, setError] = useState('');
+  const [pending, setPending] = useState<PendingPracticeAnswer | null>(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [secondsLeft, setSecondsLeft] = useState(
-    practiceSet.questions[0]?.answerSeconds ?? 90,
+    practiceSet.currentQuestion?.answerSeconds ?? 90,
   );
   const recorderRef = useRef<RecorderBundle | null>(null);
   const mountedRef = useRef(true);
   const answerDeadlineRef = useRef(0);
+  const answerStartedRef = useRef(0);
+  const uploadRef = useRef<AbortController | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const questions = practiceSet.questions;
   const question = questions[questionIndex];
@@ -700,6 +787,46 @@ function PracticeRoom({
     if (videoRef.current) videoRef.current.srcObject = stream;
   }, [stream]);
 
+  const submitAnswer = async (answer: PendingPracticeAnswer) => {
+    if (uploadRef.current) return;
+    const controller = new AbortController();
+    uploadRef.current = controller;
+    setStopping(true);
+    setUploadProgress(0);
+    setError('');
+    setPending(answer);
+    try {
+      const result = await practiceApi.answer(
+        practiceSet.practiceId,
+        answer.question.id,
+        answer.audio,
+        answer.video,
+        answer.durationSeconds,
+        { signal: controller.signal, onProgress: setUploadProgress },
+      );
+      if (!mountedRef.current) return;
+      setPending(null);
+      if (!result.nextQuestion) {
+        onComplete();
+        return;
+      }
+      const nextIndex = questions.findIndex(
+        (item) => item.id === result.nextQuestion?.id,
+      );
+      if (nextIndex < 0)
+        throw new Error(
+          'Не удалось открыть следующий вопрос. Вернитесь к подготовке и продолжите тренировку.',
+        );
+      setQuestionIndex(nextIndex);
+      setSecondsLeft(result.nextQuestion.answerSeconds);
+    } catch (caught) {
+      if (mountedRef.current) setError(errorText(caught));
+    } finally {
+      uploadRef.current = null;
+      if (mountedRef.current) setStopping(false);
+    }
+  };
+
   const finishAnswer = async () => {
     const active = recorderRef.current;
     if (!active) return;
@@ -707,16 +834,16 @@ function PracticeRoom({
     setStopping(true);
     setRecording(false);
     try {
-      // The returned blobs deliberately remain local and are immediately discarded.
-      await stopRecorders(active);
+      const blobs = await stopRecorders(active);
       if (!mountedRef.current) return;
-      const nextIndex = questionIndex + 1;
-      if (nextIndex >= questions.length) {
-        onComplete();
-        return;
-      }
-      setQuestionIndex(nextIndex);
-      setSecondsLeft(questions[nextIndex]?.answerSeconds ?? 90);
+      await submitAnswer({
+        question,
+        ...blobs,
+        durationSeconds: Math.max(
+          1,
+          Math.ceil((performance.now() - answerStartedRef.current) / 1000),
+        ),
+      });
     } catch (caught) {
       if (mountedRef.current) setError(errorText(caught));
     } finally {
@@ -750,6 +877,7 @@ function PracticeRoom({
     return () => {
       mountedRef.current = false;
       window.speechSynthesis?.cancel();
+      uploadRef.current?.abort();
       const active = recorderRef.current;
       recorderRef.current = null;
       if (active) {
@@ -763,6 +891,13 @@ function PracticeRoom({
     };
   }, []);
 
+  useEffect(() => {
+    if (!recording && !pending && !stopping) return;
+    const preventExit = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener('beforeunload', preventExit);
+    return () => window.removeEventListener('beforeunload', preventExit);
+  }, [recording, pending, stopping]);
+
   const speakQuestion = () => {
     if (!question || !('speechSynthesis' in window)) return;
     window.speechSynthesis.cancel();
@@ -772,11 +907,12 @@ function PracticeRoom({
   };
 
   const startAnswer = () => {
-    if (!question || recording || stopping) return;
+    if (!question || recording || stopping || pending) return;
     window.speechSynthesis?.cancel();
     setError('');
     try {
       recorderRef.current = startRecorders(stream);
+      answerStartedRef.current = performance.now();
       answerDeadlineRef.current =
         performance.now() + question.answerSeconds * 1000;
       setSecondsLeft(question.answerSeconds);
@@ -791,7 +927,19 @@ function PracticeRoom({
   return (
     <main className="interview-room">
       <div className="px-5 pt-4">
-        <BackButton onClick={onBack} label="Выйти из тренировки" />
+        <BackButton
+          onClick={() => {
+            if (
+              (recording || pending || stopping) &&
+              !window.confirm(
+                'Текущий ответ ещё не сохранён. Выйти из тренировки?',
+              )
+            )
+              return;
+            onBack();
+          }}
+          label="Выйти из тренировки"
+        />
       </div>
       <div className="interview-topline">
         <div className="flex items-center gap-2 text-xs font-medium">
@@ -800,7 +948,7 @@ function PracticeRoom({
             aria-hidden="true"
           />
           {recording
-            ? 'Тренировочная запись — только в этом браузере'
+            ? 'Записываем ответ для вашего личного разбора'
             : 'Тренировка не передаётся рекрутеру'}
         </div>
         <div className="interview-timer">
@@ -818,8 +966,8 @@ function PracticeRoom({
           </div>
           <h1 className="interview-question">{question.text}</h1>
           <p className="mt-3 text-xs text-muted-foreground">
-            Настоящие вопросы будут другими. Содержание этого ответа не
-            оценивается.
+            В настоящем интервью вопросы будут другими. Этот ответ будет
+            разобран только в вашей тренировке.
           </p>
         </div>
         <div className="voice-stage">
@@ -834,7 +982,7 @@ function PracticeRoom({
           <button
             className={`voice-orb ${recording ? 'orb-answering' : 'orb-asking'}`}
             onClick={() => (recording ? void finishAnswer() : startAnswer())}
-            disabled={stopping}
+            disabled={stopping || Boolean(pending)}
             aria-label={
               recording ? 'Закончить тренировочный ответ' : 'Начать ответ'
             }
@@ -856,10 +1004,16 @@ function PracticeRoom({
             aria-live="polite"
           >
             {stopping
-              ? 'Удаляем локальную запись и готовим следующий пример…'
+              ? pending
+                ? uploadProgress < 100
+                  ? `Загружаем ответ: ${uploadProgress}%`
+                  : 'Ответ загружен. Распознаём речь…'
+                : 'Завершаем запись…'
               : recording
                 ? 'Говорите и нажмите на круг, когда закончите.'
-                : 'Нажмите на круг, чтобы начать тренировочный ответ.'}
+                : pending
+                  ? 'Запись осталась в браузере. Повторите загрузку, чтобы сохранить ответ.'
+                  : 'Нажмите на круг, чтобы начать тренировочный ответ.'}
           </p>
           {!recording && !stopping ? (
             <Button
@@ -877,6 +1031,11 @@ function PracticeRoom({
               {error}
             </p>
           ) : null}
+          {pending && !stopping ? (
+            <Button className="mt-4" onClick={() => void submitAnswer(pending)}>
+              <RotateCcw data-icon="inline-start" /> Повторить загрузку ответа
+            </Button>
+          ) : null}
         </div>
         <div className="interview-progress-wrap">
           <div className="mb-2 flex justify-between text-xs text-muted-foreground">
@@ -892,41 +1051,6 @@ function PracticeRoom({
           </div>
         </div>
       </div>
-    </main>
-  );
-}
-
-function PracticeComplete({
-  onBack,
-  onRealInterview,
-}: {
-  onBack: () => void;
-  onRealInterview: () => void;
-}) {
-  return (
-    <main className="candidate-shell grid min-h-[calc(100dvh-68px)] place-items-center py-12 text-center">
-      <section className="surface-card max-w-xl p-7 sm:p-10">
-        <span className="mx-auto grid size-14 place-items-center rounded-2xl bg-emerald-50 text-emerald-700">
-          <CheckCircle2 className="size-7" />
-        </span>
-        <p className="eyebrow mt-5">Тренировка завершена</p>
-        <h1 className="mt-2 text-2xl font-semibold">
-          Камера и микрофон работают
-        </h1>
-        <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
-          Тренировочные записи удалены. Настоящее интервью ещё не началось, его
-          таймер не запущен.
-        </p>
-        <div className="mt-6 flex flex-col justify-center gap-3 sm:flex-row">
-          <Button variant="outline" onClick={onBack}>
-            Вернуться к подготовке
-          </Button>
-          <Button onClick={onRealInterview}>
-            Перейти к согласию и старту
-            <ArrowRight data-icon="inline-end" />
-          </Button>
-        </div>
-      </section>
     </main>
   );
 }
@@ -1720,7 +1844,7 @@ export function CandidateApp({
   );
   const [stream, setStream] = useState<MediaStream | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const [practiceSet, setPracticeSet] = useState<PracticeSet | null>(null);
+  const [practiceSet, setPracticeSet] = useState<PracticeSession | null>(null);
   const [practiceLoading, setPracticeLoading] = useState(false);
   const [practiceError, setPracticeError] = useState('');
   const practiceRequestRef = useRef<AbortController | null>(null);
@@ -1818,7 +1942,7 @@ export function CandidateApp({
     setPracticeLoading(true);
     setPracticeError('');
     try {
-      const generated = await api.createPracticeSet(
+      const generated = await practiceApi.create(
         briefing.interviewId,
         controller.signal,
       );
@@ -1837,14 +1961,33 @@ export function CandidateApp({
   };
 
   const openPractice = async () => {
-    const available = practiceSet || (await loadPracticeSet());
-    if (available) setView('practice_preflight');
+    const available = await loadPracticeSet();
+    if (!available) return;
+    setView(
+      ['analyzing', 'completed', 'error'].includes(available.status) ||
+        (available.status === 'in_progress' &&
+          !available.currentQuestion &&
+          available.answeredQuestionIds.length > 0)
+        ? 'practice_complete'
+        : 'practice_preflight',
+    );
   };
 
-  const startPractice = (media: MediaStream) => {
+  const startPractice = async (media: MediaStream) => {
+    if (!practiceSet) return;
     streamRef.current = media;
-    setStream(media);
-    setView('practice_interview');
+    const session = await practiceApi.start(practiceSet.practiceId);
+    if (media.getTracks().every((track) => track.readyState === 'ended'))
+      return;
+    setPracticeSet(session);
+    if (!session.currentQuestion) {
+      media.getTracks().forEach((track) => track.stop());
+      setView('practice_complete');
+    } else {
+      streamRef.current = media;
+      setStream(media);
+      setView('practice_interview');
+    }
   };
 
   const leavePractice = (nextView: CandidateView) => {
@@ -1967,15 +2110,23 @@ export function CandidateApp({
       <PracticeRoom
         practiceSet={practiceSet}
         stream={stream}
-        onComplete={() => leavePractice('practice_complete')}
+        onComplete={() => {
+          setPracticeSet((current) =>
+            current
+              ? { ...current, status: 'analyzing', currentQuestion: null }
+              : current,
+          );
+          leavePractice('practice_complete');
+        }}
         onBack={() => leavePractice('preparation')}
       />
     );
-  if (view === 'practice_complete')
+  if (view === 'practice_complete' && practiceSet)
     return (
-      <PracticeComplete
+      <PracticeReview
+        practiceId={practiceSet.practiceId}
         onBack={() => setView('preparation')}
-        onRealInterview={() => setView('preparation')}
+        notify={notify}
       />
     );
   if (view === 'practice_preflight' && briefing)
@@ -1991,7 +2142,7 @@ export function CandidateApp({
       <>
         <Preflight
           onBack={() => setView('preparation')}
-          onReady={(media) => void startInterview(media)}
+          onReady={startInterview}
         />
         {error ? (
           <div className="app-notice app-notice-visible" role="alert">

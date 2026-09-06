@@ -43,6 +43,9 @@ from interview_api.workflow.errors import (
     WorkflowValidationError,
 )
 from interview_api.workflow.hiring_service import HiringWorkflowMixin
+from interview_api.workflow.practice_repository import PracticeRepository
+from interview_api.workflow.practice_service import PracticeWorkflowMixin
+from interview_api.workflow.practice_topics import broad_topics
 from interview_api.workflow.repository import SqlAlchemyWorkflowRepository
 from interview_api.workflow.schemas import (
     AnalysisEvidenceResponse,
@@ -64,8 +67,6 @@ from interview_api.workflow.schemas import (
     MediaListResponse,
     PositionDetailResponse,
     PositionResponse,
-    PracticeQuestionResponse,
-    PracticeSetResponse,
     PublicQuestion,
     QuestionResponse,
     QuestionReviewRequest,
@@ -78,7 +79,7 @@ from interview_api.workflow.telegram_auth import TelegramAuthMixin
 from interview_api.workflow.telegram_contacts import extract_telegram_username
 
 
-class WorkflowService(TelegramAuthMixin, HiringWorkflowMixin):
+class WorkflowService(PracticeWorkflowMixin, TelegramAuthMixin, HiringWorkflowMixin):
     def __init__(
         self,
         *,
@@ -88,7 +89,7 @@ class WorkflowService(TelegramAuthMixin, HiringWorkflowMixin):
         invite_base_url: str = "http://localhost:3000",
         document_extractor: DocumentTextExtractor | None = None,
         clock: Callable[[], datetime] | None = None,
-        max_document_bytes: int = 10 * 1024 * 1024,
+        max_document_bytes: int = 50 * 1024 * 1024,
         max_document_characters: int = 100_000,
         max_audio_bytes: int = 25 * 1024 * 1024,
         max_video_bytes: int = 250 * 1024 * 1024,
@@ -101,7 +102,7 @@ class WorkflowService(TelegramAuthMixin, HiringWorkflowMixin):
         self.repository = repository
         self.storage = storage
         self.ai = ai
-        self._practice_sets: dict[str, PracticeSetResponse] = {}
+        self.practice_repository = PracticeRepository(repository._sessions)
         self.invite_base_url = invite_base_url.rstrip("/")
         self._extractor = document_extractor or PdfDocxTextExtractor()
         self._clock = clock or (lambda: datetime.now(UTC))
@@ -123,6 +124,7 @@ class WorkflowService(TelegramAuthMixin, HiringWorkflowMixin):
     async def initialize(self) -> None:
         await self.storage.ensure_bucket()
         await self.repository.recover_interrupted_analyses()
+        await self.practice_repository.recover_interrupted()
         await self.repository.ensure_demo_users()
         await self._migrate_legacy_hiring()
 
@@ -400,117 +402,6 @@ class WorkflowService(TelegramAuthMixin, HiringWorkflowMixin):
         candidate = await self.repository.get_candidate(actor.candidate_id)
         interview = await self.repository.get_interview_for_candidate(candidate.id)
         return await self._briefing(candidate, interview)
-
-    async def create_practice_set(
-        self, *, actor: UserRow, interview_id: str
-    ) -> PracticeSetResponse:
-        interview = await self._candidate_interview(actor, interview_id)
-        if interview.status != "ready":
-            raise WorkflowConflictError(
-                "Practice is available only before the real interview starts."
-            )
-        cached = self._practice_sets.get(interview.id)
-        if cached is not None:
-            return cached
-        candidate = await self.repository.get_candidate(interview.candidate_id)
-        position = await self.repository.get_position(candidate.position_id)
-        real_questions = [
-            row.text
-            for row in await self.repository.list_questions(candidate.id)
-            if row.status == "approved"
-        ]
-        role_family = self._practice_role_family(position.role or position.title)
-        level_band = self._practice_level_band(position.level, position.title)
-
-        proposals: list[PracticeQuestionProposal] = []
-        for _attempt in range(2):
-            try:
-                generated = await self.ai.generate_practice_questions(
-                    role_family=role_family,
-                    level_band=level_band,
-                    question_count=3,
-                    language="ru",
-                )
-            except WorkflowProviderError:
-                continue
-            proposals = self._safe_practice_questions(generated, real_questions)
-            if len(proposals) == 3:
-                break
-
-        if len(proposals) < 3:
-            fallback = [
-                PracticeQuestionProposal(
-                    text=(
-                        "Представьте учебный сервис в незнакомой предметной области. "
-                        "Как бы вы уточнили задачу и выбрали первый шаг к решению?"
-                    ),
-                    topic="Разбор ситуации",
-                ),
-                PracticeQuestionProposal(
-                    text=(
-                        "На вымышленном проекте есть два разумных подхода. "
-                        "Как бы вы сравнили их и проверили своё решение?"
-                    ),
-                    topic="Принятие решений",
-                ),
-                PracticeQuestionProposal(
-                    text=(
-                        "Результат учебной задачи оказался хуже ожидаемого. "
-                        "Как бы вы нашли причину и скорректировали дальнейшие действия?"
-                    ),
-                    topic="Рефлексия",
-                ),
-                PracticeQuestionProposal(
-                    text=(
-                        "Вообразите, что участники учебной команды по-разному поняли цель. "
-                        "Как бы вы помогли им договориться о следующем шаге?"
-                    ),
-                    topic="Коммуникация",
-                ),
-                PracticeQuestionProposal(
-                    text=(
-                        "В тренировочном кейсе не хватает данных для уверенного решения. "
-                        "Какие вопросы вы зададите и какие допущения обозначите?"
-                    ),
-                    topic="Работа с неопределённостью",
-                ),
-            ]
-            existing = {self._normalize_question(item.text) for item in proposals}
-            for item in self._safe_practice_questions(fallback, real_questions):
-                normalized = self._normalize_question(item.text)
-                if normalized in existing:
-                    continue
-                proposals.append(item)
-                existing.add(normalized)
-                if len(proposals) == 3:
-                    break
-
-        if len(proposals) < 2:
-            raise WorkflowProviderError("Could not create a safely distinct practice set.")
-
-        # Generation may finish after the candidate starts in another tab.
-        interview = await self._candidate_interview(actor, interview_id)
-        if interview.status != "ready":
-            raise WorkflowConflictError(
-                "Practice is available only before the real interview starts."
-            )
-        response = PracticeSetResponse(
-            questions=[
-                PracticeQuestionResponse(
-                    id=f"practice-{secrets.token_urlsafe(10)}",
-                    text=item.text,
-                    topic=item.topic,
-                    order_index=index,
-                    answer_seconds=item.answer_seconds,
-                )
-                for index, item in enumerate(proposals[:3])
-            ]
-        )
-        # Practice is ephemeral; do not retain every interview for the process lifetime.
-        if len(self._practice_sets) >= 128:
-            self._practice_sets.pop(next(iter(self._practice_sets)))
-        self._practice_sets[interview.id] = response
-        return response
 
     async def start_interview(self, *, actor: UserRow, interview_id: str) -> InterviewStateResponse:
         interview = await self._candidate_interview(actor, interview_id)
@@ -1017,7 +908,7 @@ class WorkflowService(TelegramAuthMixin, HiringWorkflowMixin):
             if row.status == "approved"
         ]
         current = await self._active_current_question(interview)
-        topics = list(dict.fromkeys(row.topic for row in questions if row.topic.strip()))
+        topics = broad_topics([f"{row.topic} {row.competency}" for row in questions])
         return InterviewBriefingResponse(
             interview_id=interview.id,
             candidate_id=candidate.id,
